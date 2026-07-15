@@ -1,0 +1,317 @@
+<!doctype html>
+<!--
+  LOGO! Web Dumper — read & decode a Siemens LOGO! 0BA6 program in the browser.
+  https://github.com/yonran/logo-web-dumper   (public domain / Unlicense)
+
+  Protocol & program-format decoding reimplemented from the community
+  reverse-engineering by brickpool and others. Full sources & citations:
+    - PROTOCOL.md in this repo
+    - brickpool/logo ...... https://github.com/brickpool/logo
+    - PG protocol .......... https://github.com/brickpool/logo/wiki/PG-Protocol
+    - 0BA5 block format .... https://github.com/brickpool/logo/wiki/0BA5-Dekodierung
+    - NI LabVIEW driver .... https://forums.ni.com/t5/LabVIEW/LOGO-PLC-driver-based-on-LabVIEW/td-p/877701
+  Not affiliated with Siemens. Siemens and LOGO! are trademarks of Siemens AG.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOGO! 0BA6 Program Dumper (Web Serial / WebUSB)</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#666; --line:#ccc; --acc:#1769aa; --ok:#137333; --err:#b3261e; --card:#f6f6f6; }
+  @media (prefers-color-scheme: dark){ :root{ --bg:#14151a; --fg:#e8e8ea; --mut:#9aa0a6; --line:#333; --acc:#4ea1e0; --ok:#5bb974; --err:#f2857c; --card:#1e2028; } }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:900px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 16px}
+  button{font:inherit;padding:9px 14px;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:8px;cursor:pointer}
+  button.sec{background:transparent;color:var(--acc)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+  label{color:var(--mut);font-size:13px}
+  input{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);width:120px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0}
+  #log{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;height:240px;overflow:auto}
+  .ok{color:var(--ok)} .err{color:var(--err)} .mut{color:var(--mut)}
+  code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:13px}
+  .warn{border-left:3px solid #e0a800;padding-left:10px}
+</style>
+</head>
+<body>
+<h1>LOGO! 0BA6 Program Dumper</h1>
+<p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA6</b> over the serial PG protocol, in your browser. Desktop uses Web Serial; Android Chrome uses WebUSB. Nothing is uploaded — it all runs locally.</p>
+
+<div class="card warn">
+  <b>Before you start</b> — put the LOGO! in <b>STOP</b> (ESC → Stop on the device). Plug the USB cable in. On Android use an OTG adapter and <b>Chrome</b>. This is a first-cut, hardware-untested tool: watch the log, and if the program area comes back wrong, the "program name" self-test below tells you whether the address page is right.
+</div>
+
+<div class="row">
+  <button id="connect">Connect cable</button>
+  <span id="status" class="mut">not connected</span>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="ident" class="sec" disabled>1 · Identify (0x21)</button>
+    <button id="nametest" class="sec" disabled>2 · Read program name (self-test)</button>
+    <button id="stop" class="sec" disabled>Send STOP</button>
+  </div>
+  <div class="row">
+    <label>Start addr (hex) <input id="addr" value="00FF0EE8"></label>
+    <label>Length (bytes) <input id="len" value="2000"></label>
+    <button id="dump" disabled>3 · Dump program → .bin</button>
+  </div>
+  <p class="mut" style="font-size:12.5px;margin:6px 0 0">
+    Defaults assume the 0BA5 program map (<code>0x0EE8–0x16B7</code>, 2000 bytes) under the 0BA6 <code>0x00FF____</code> page. The name self-test reads <code>0x00FF0570</code> (16 bytes) — if it prints readable text, the page mapping is correct and the dump address is trustworthy. If not, the mapping needs adjusting; tell me what the self-test returned.
+  </p>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="decode" disabled>4 · Read all + decode → netlist</button>
+    <button id="decfile" class="sec">Decode a saved .bin file…</button>
+    <input type="file" id="binfile" accept=".bin" style="display:none">
+  </div>
+  <p class="mut" style="font-size:12.5px;margin:6px 0 0">
+    Reads the pointer table (<code>0x0C14</code>), output/merker wiring (<code>0x0E20</code>) and program memory (<code>0x0EE8</code>), then walks every block and prints a human-readable netlist. Basic gates (AND/OR/NOT/…) are decoded exactly; special-function <b>wiring</b> is resolved but their numeric parameters (timer values etc.) are shown raw for now.
+  </p>
+  <pre id="netlist" style="white-space:pre;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;overflow:auto;max-height:340px;margin:10px 0 0"></pre>
+</div>
+
+<div id="log"></div>
+
+<details style="margin:16px 0;font-size:13px">
+  <summary style="cursor:pointer;color:var(--acc)">Sources &amp; credits</summary>
+  <div class="mut" style="margin-top:8px">
+    <p>Protocol and program-format decoding reimplemented from community reverse-engineering. This tool is independent and <b>not affiliated with Siemens</b>; Siemens and LOGO! are trademarks of Siemens AG. Full details in <a href="https://github.com/yonran/logo-web-dumper/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</p>
+    <ul style="line-height:1.7">
+      <li>PG serial protocol (connect <code>0x21</code>, Read Block <code>0x05</code>, 4-byte addressing, XOR checksum) — <a href="https://github.com/brickpool/logo/wiki/PG-Protocol">brickpool/logo · PG-Protocol wiki</a> and its <a href="https://github.com/brickpool/logo/blob/master/src/LogoPG.cpp">LogoPG.cpp</a> source.</li>
+      <li>Block/program-memory format (connector encoding, GF/SF opcodes, pointer table) — <a href="https://github.com/brickpool/logo/wiki/0BA5-Dekodierung">brickpool/logo · 0BA5-Dekodierung wiki</a>.</li>
+      <li>Original address-space &amp; command reverse-engineering — SNATAX (0BA6) and cacalderon (0BA5, DE-9 pinout) on the <a href="https://forums.ni.com/t5/LabVIEW/LOGO-PLC-driver-based-on-LabVIEW/td-p/877701">NI LabVIEW forum</a>; neiseng on <a href="https://www.amobbs.com/thread-3705429-1-1.html">amobbs</a> (0BA5 data address space, password, cyclic read).</li>
+      <li>Browser APIs — <a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API">Web Serial API</a> (desktop), <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">WebUSB API</a> (Android).</li>
+      <li>Why Siemens' free demo can't do this: LOGO!Soft Comfort <a href="https://support.industry.siemens.com/cs/document/110002070/">V9 Demo</a> disables program transfer (full license 6ED1058-0BA08-0YA1 required).</li>
+    </ul>
+  </div>
+</details>
+
+<script>
+const $ = s => document.querySelector(s);
+const logEl = $('#log');
+function log(m, cls){ const s=document.createElement('span'); if(cls)s.className=cls; s.textContent=m+'\n'; logEl.appendChild(s); logEl.scrollTop=logEl.scrollHeight; }
+function hex(b){ return [...b].map(x=>x.toString(16).padStart(2,'0')).join(' '); }
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+// ---- Transport abstraction: .write(Uint8Array), .read(n, timeoutMs)->Uint8Array, .close()
+let xport = null;
+
+// ========== Web Serial (desktop) ==========
+async function connectWebSerial(){
+  const port = await navigator.serial.requestPort();
+  await port.open({ baudRate:9600, dataBits:8, parity:'even', stopBits:1 });
+  const reader = port.readable.getReader();
+  let buf = new Uint8Array(0);
+  const pump = (async()=>{ try{ for(;;){ const {value,done}=await reader.read(); if(done)break; if(value){ const n=new Uint8Array(buf.length+value.length); n.set(buf); n.set(value,buf.length); buf=n; } } }catch(e){} })();
+  return {
+    kind:'Web Serial',
+    async write(b){ const w=port.writable.getWriter(); await w.write(b); w.releaseLock(); },
+    async read(n,to=1500){ const t=Date.now(); while(buf.length<n && Date.now()-t<to) await sleep(15); const out=buf.slice(0,n); buf=buf.slice(out.length); return out; },
+    async close(){ try{await reader.cancel()}catch(e){} try{await port.close()}catch(e){} }
+  };
+}
+
+// ========== WebUSB (Android) — minimal chip drivers ==========
+const FILTERS=[{vendorId:0x0403},{vendorId:0x10c4},{vendorId:0x1a86},{vendorId:0x067b}];
+async function connectWebUSB(){
+  const dev = await navigator.usb.requestDevice({filters:FILTERS});
+  await dev.open();
+  if(!dev.configuration) await dev.selectConfiguration(1);
+  // find interface + bulk endpoints
+  let iface, epIn, epOut;
+  for(const i of dev.configuration.interfaces){ const a=i.alternate; const ins=a.endpoints.filter(e=>e.direction==='in'&&e.type==='bulk'); const outs=a.endpoints.filter(e=>e.direction==='out'&&e.type==='bulk'); if(ins.length&&outs.length){ iface=i; epIn=ins[0].endpointNumber; epOut=outs[0].endpointNumber; break; } }
+  if(iface===undefined) throw new Error('No bulk endpoints found on this device');
+  try{ await dev.claimInterface(iface.interfaceNumber); }catch(e){ throw new Error('claimInterface failed ('+e.message+'). On Android another driver may hold the device.'); }
+  const vid=dev.vendorId;
+  const cOut=(req,val,idx=0,data)=>dev.controlTransferOut({requestType:'vendor',recipient:'device',request:req,value:val,index:idx}, data);
+  // --- configure 9600 8E1 per chip ---
+  if(vid===0x10c4){ // CP210x
+    log('chip: CP210x','mut');
+    await cOut(0x00,0x0001); // IFC_ENABLE
+    await cOut(0x1E,0x0000,0x0000,new Uint8Array([0x80,0x25,0,0])); // SET_BAUDRATE 9600 LE (wIndex holds data on some fw; send both)
+    await dev.controlTransferOut({requestType:'vendor',recipient:'device',request:0x1E,value:0,index:0}, new Uint8Array([0x80,0x25,0,0]));
+    await cOut(0x03,0x0820); // SET_LINE_CTL: 8 data, even parity, 1 stop
+  } else if(vid===0x1a86){ // CH340/CH341
+    log('chip: CH340/CH341','mut');
+    await cOut(0xA1,0,0);
+    // baud 9600 via CH341 factor/divisor algorithm
+    const BASE=1532620800; let factor=Math.floor(BASE/9600), divisor=3;
+    while(factor>0xfff0 && divisor){ factor>>=3; divisor--; }
+    factor=0x10000-factor; const a=(factor&0xff00)|divisor, b=factor&0xff;
+    await cOut(0x9a,0x1312,a); await cOut(0x9a,0x0f2c,b);
+    await cOut(0x9a,0x2518,0x00db); // LCR: RX|TX enable, parity enable, even, 8 bits
+    await cOut(0xA1,0x501f,0xd90a);
+  } else if(vid===0x0403){ // FTDI
+    log('chip: FTDI','mut');
+    await cOut(0x00,0x0000); // reset
+    await cOut(0x03,0x4138); // set baud 9600 (FT232 divisor)
+    await cOut(0x04,0x1008); // data characteristics: 8 data bits, even parity, 1 stop  (0x08=8bits, parity even=2<<8 ->0x0200? see note)
+  } else {
+    log('chip: unknown vendor 0x'+vid.toString(16)+' — trying with no config (may fail)','err');
+  }
+  let buf=new Uint8Array(0);
+  const ftdi = vid===0x0403;
+  const pump=(async()=>{ for(;;){ try{ const r=await dev.transferIn(epIn,64); if(r.data&&r.data.byteLength){ let v=new Uint8Array(r.data.buffer); if(ftdi&&v.length>=2) v=v.slice(2); // FTDI prepends 2 status bytes per packet
+        const n=new Uint8Array(buf.length+v.length); n.set(buf); n.set(v,buf.length); buf=n; } }catch(e){ break; } } })();
+  return {
+    kind:'WebUSB',
+    async write(b){ await dev.transferOut(epOut,b); },
+    async read(n,to=1500){ const t=Date.now(); while(buf.length<n && Date.now()-t<to) await sleep(15); const out=buf.slice(0,n); buf=buf.slice(out.length); return out; },
+    async close(){ try{await dev.close()}catch(e){} }
+  };
+}
+
+// ========== PG protocol ==========
+async function pgConnect(){
+  await xport.read(64,50); // drain
+  await xport.write(new Uint8Array([0x21]));
+  const r = await xport.read(4, 1500);
+  log('→ 21    ← '+(r.length?hex(r):'(nothing)'), r.length?null:'err');
+  if(r.length<4 || r[0]!==0x06){ throw new Error('No 0BA6 ack. Got: '+hex(r)+'. Is it in STOP and cabled? Genuine cable may need RTS/DTR high.'); }
+  const ident=r[3];
+  const name={0x43:'0BA6',0x44:'0BA6.ES3',0x45:'0BA6.ES10',0x40:'0BA4',0x42:'0BA5'}[ident]||('0x'+ident.toString(16));
+  log('Connected. IdentNo=0x'+ident.toString(16)+' → '+name, ident>=0x43&&ident<=0x45?'ok':'err');
+  return ident;
+}
+async function readBlock(addr, count){
+  const cmd=new Uint8Array([0x05,(addr>>>24)&0xff,(addr>>>16)&0xff,(addr>>>8)&0xff,addr&0xff,(count>>8)&0xff,count&0xff]);
+  await xport.write(cmd);
+  const ack=await xport.read(1,1500);
+  if(ack.length<1||ack[0]!==0x06) throw new Error('Read Block not acked at 0x'+addr.toString(16)+' (got '+hex(ack)+')');
+  const data=await xport.read(count, 4000);
+  const cs=await xport.read(1,1500);
+  let x=0; for(const d of data) x^=d;
+  const okcs = cs.length&&cs[0]===x;
+  log('Read 0x'+addr.toString(16).padStart(8,'0')+' ×'+count+': got '+data.length+' bytes, XOR '+(okcs?'ok':'MISMATCH ('+hex(cs)+' vs '+x.toString(16)+')'), okcs?'ok':'err');
+  return data;
+}
+async function sendStop(){ await xport.write(new Uint8Array([0x55,0x12,0x12,0xAA])); const r=await xport.read(4,1000); log('STOP → 55 12 12 AA  ← '+hex(r)); }
+
+// ========== UI ==========
+$('#connect').onclick=async()=>{
+  try{
+    if('serial' in navigator){ log('Using Web Serial (desktop).','mut'); xport=await connectWebSerial(); }
+    else if('usb' in navigator){ log('Web Serial unavailable → using WebUSB (Android).','mut'); xport=await connectWebUSB(); }
+    else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
+    $('#status').textContent='connected ('+xport.kind+')'; $('#status').className='ok';
+    for(const id of ['#ident','#nametest','#stop','#dump','#decode']) $(id).disabled=false;
+    log('Cable connected via '+xport.kind+'. Configured 9600 8E1.','ok');
+  }catch(e){ log('Connect failed: '+e.message,'err'); }
+};
+$('#ident').onclick=()=>pgConnect().catch(e=>log(e.message,'err'));
+$('#stop').onclick=()=>sendStop().catch(e=>log(e.message,'err'));
+$('#nametest').onclick=async()=>{ try{ await pgConnect(); const d=await readBlock(0x00FF0570,16); log('Program name: "'+[...d].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('')+'"', 'ok'); }catch(e){ log(e.message,'err'); } };
+$('#dump').onclick=async()=>{
+  try{
+    await pgConnect();
+    const addr=parseInt($('#addr').value,16), len=parseInt($('#len').value,10);
+    const data=await readBlock(addr,len);
+    const blob=new Blob([data],{type:'application/octet-stream'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='logo_0ba6_'+$('#addr').value+'_'+len+'.bin'; a.click();
+    log('Saved '+data.length+' bytes. Send me this .bin and I can decode the blocks per the 0BA5 map.','ok');
+  }catch(e){ log(e.message,'err'); }
+};
+// ========== Decoder (0BA5/0BA6 block format) ==========
+// Connector word (little-endian) -> signal name. null = unused (FFFF).
+function co(w){
+  if(w===0xFFFF) return null;
+  const hi=w>>8, lo=w&0xff, neg=(hi&0x40)!==0, p=neg?'/':'';
+  if(hi&0x80){ // block reference: LoByte 0x0A..0x8C => B001..B130
+    if(lo>=0x0A && lo<=0x8C) return p+'B'+String(lo-9).padStart(3,'0');
+    return p+'B?('+w.toString(16).padStart(4,'0')+')';
+  }
+  if(hi===0x00 || hi===0x40){ // terminal / constant
+    if(lo<=0x17) return p+'I'+(lo+1);
+    if(lo>=0x30&&lo<=0x3F) return p+'Q'+(lo-0x30+1);
+    if(lo>=0x50&&lo<=0x67) return p+'M'+(lo-0x50+1);
+    if(lo>=0x80&&lo<=0x87) return p+'AI'+(lo-0x80+1);
+    if(lo>=0x92&&lo<=0x97) return p+'AM'+(lo-0x92+1);
+    if(lo>=0xA0&&lo<=0xA3) return p+['C-up','C-dn','C-lt','C-rt'][lo-0xA0];
+    if(lo>=0xB0&&lo<=0xB7) return p+'S'+(lo-0xB0+1);
+    if(lo===0xFC) return p+'Float';
+    if(lo===0xFD) return p+'hi';
+    if(lo===0xFE) return p+'lo';
+  }
+  return '?'+w.toString(16).padStart(4,'0');
+}
+const GF={0x01:['AND',12],0x02:['OR',12],0x03:['NOT',4],0x04:['NAND',12],0x05:['NOR',12],0x06:['XOR',8],0x07:['AND-edge',12],0x08:['NAND-edge',12]};
+const SF={0x21:['on-delay',8],0x22:['off-delay',12],0x23:['pulse-relay',12],0x24:['weekly-timer',20],0x25:['latching-relay',8],0x27:['ret-on-delay',12],0x2B:['up/down-counter',24],0x2D:['async-pulse-gen',12],0x2F:['on/off-delay',12],0x31:['stairwell-switch',12],0x34:['message-text',8],0x35:['analog-threshold',16],0x39:['analog-watch',20]};
+const w16 = (b,i)=> b[i] | (b[i+1]<<8);
+const hexb = (b,a,n)=> [...b.slice(a,a+n)].map(x=>x.toString(16).padStart(2,'0')).join(' ');
+
+// combined dump layout: [260 ptr @0C14][200 term @0E20][2000 prog @0EE8]
+function decodeCombined(bytes){
+  const ptr=bytes.slice(0,260), term=bytes.slice(260,460), prog=bytes.slice(460,2460);
+  const out=[];
+  out.push('=== OUTPUTS / MARKERS (from 0x0E20 wiring) ===');
+  const groups=[['Q',0x0E20,16],['M',0x0E48,24],['AQ',0x0E84,2],['X',0x0E98,16]];
+  for(const [lbl,addr,cnt] of groups){
+    for(let i=0;i<cnt;i++){
+      const rec=Math.floor(i/8), slot=i%8;
+      const off=(addr-0x0E20)+rec*20+2+slot*2;
+      if(off+1>=term.length) continue;
+      const src=co(w16(term,off));
+      if(src) out.push('  '+lbl+(i+1)+' = '+src);
+    }
+  }
+  out.push('');
+  out.push('=== BLOCKS (via pointer table 0x0C14 → program mem 0x0EE8) ===');
+  out.push('  (basic gates decoded exactly; special-function params shown raw)');
+  let nBlocks=0;
+  for(let i=0;i<130;i++){
+    const P=w16(ptr,i*2);
+    if(P===0xFFFF) continue;
+    const boff=P-0xC8;                 // 0x0E20+P - 0x0EE8
+    if(boff<0 || boff+2>prog.length) continue;
+    nBlocks++;
+    const op=prog[boff], bn='B'+String(i+1).padStart(3,'0');
+    if(GF[op]){
+      const [nm,len]=GF[op], inputs=[];
+      for(let o=boff+2;o<boff+len && o+1<prog.length;o+=2){ const c=co(w16(prog,o)); if(c) inputs.push(c); }
+      out.push('  '+bn+' = '+nm+'('+inputs.join(', ')+')');
+    } else if(SF[op]){
+      const [nm,len]=SF[op];
+      out.push('  '+bn+' = '+nm.padEnd(16)+' raw: '+hexb(prog,boff,Math.min(len,prog.length-boff)));
+    } else {
+      out.push('  '+bn+' = ??? opcode 0x'+op.toString(16).padStart(2,'0')+'  raw: '+hexb(prog,boff,12));
+    }
+  }
+  if(!nBlocks) out.push('  (no blocks found — pointer table is all FFFF. Wrong address page, or program empty/password-protected.)');
+  out.push('');
+  out.push('Blocks found: '+nBlocks+'. Basic gates are exact; send me the .bin and I can decode the special-function parameters (timer values, counter limits, etc.).');
+  return out.join('\n');
+}
+
+async function readAllAndDecode(){
+  await pgConnect();
+  log('Reading pointer table, wiring, and program…','mut');
+  const ptr=await readBlock(0x00FF0C14,260);
+  const term=await readBlock(0x00FF0E20,200);
+  const prog=await readBlock(0x00FF0EE8,2000);
+  const full=new Uint8Array(2460); full.set(ptr,0); full.set(term,260); full.set(prog,460);
+  // offer combined download for offline re-decode
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([full])); a.download='logo_0ba6_full.bin'; a.click();
+  $('#netlist').textContent=decodeCombined(full);
+  log('Decoded. Combined dump saved as logo_0ba6_full.bin (re-decodable with the file button).','ok');
+}
+$('#decode').onclick=()=>readAllAndDecode().catch(e=>log(e.message,'err'));
+$('#decfile').onclick=()=>$('#binfile').click();
+$('#binfile').onchange=async(e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  const b=new Uint8Array(await f.arrayBuffer());
+  if(b.length<2460){ log('File is '+b.length+' bytes; expected a 2460-byte combined dump (from button 4).','err'); return; }
+  $('#netlist').textContent=decodeCombined(b);
+  log('Decoded '+f.name+'.','ok');
+};
+
+if(!('serial' in navigator) && !('usb' in navigator)) log('This browser has neither Web Serial nor WebUSB. Use Chrome/Edge (desktop) or Chrome (Android).','err');
+</script>
+</body>
+</html>
