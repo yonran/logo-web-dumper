@@ -53,6 +53,7 @@
   <div class="row">
     <button id="ident" class="sec" disabled>1 · Identify (0x21)</button>
     <button id="nametest" class="sec" disabled>2 · Read program name (self-test)</button>
+    <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
     <button id="stop" class="sec" disabled>Send STOP</button>
   </div>
   <div class="row">
@@ -183,29 +184,101 @@ async function connectWebUSB(){
 
 // ========== PG protocol ==========
 async function pgConnect(){
-  await xport.read(64,50); // drain
+  const stale = await xport.read(4096,80); // drain
+  if(stale.length) log('drained '+stale.length+' stale byte(s) before connect: '+hex(stale),'mut');
   await xport.write(new Uint8Array([0x21]));
   const r = await xport.read(4, 1500);
   log('→ 21    ← '+(r.length?hex(r):'(nothing)'), r.length?null:'err');
   if(r.length<4 || r[0]!==0x06){ throw new Error('No 0BA6 ack. Got: '+hex(r)+'. Is it in STOP and cabled? Genuine cable may need RTS/DTR high.'); }
+  // Anything beyond the 4 expected bytes would desync every later read — surface it.
+  await drain('connect',120);
   const ident=r[3];
   const name={0x43:'0BA6',0x44:'0BA6.ES3',0x45:'0BA6.ES10',0x40:'0BA4',0x42:'0BA5'}[ident]||('0x'+ident.toString(16));
   log('Connected. IdentNo=0x'+ident.toString(16)+' → '+name, ident>=0x43&&ident<=0x45?'ok':'err');
   return ident;
 }
+// CPU exception codes carried in a NOK (0x15) response. Source: brickpool/logo
+// LogoPG.cpp CpuError() / cpuCode* defines.
+const CPU_ERR={
+  0x01:'Device busy — LOGO! cannot accept a telegram right now',
+  0x02:'Device timeout — resource unavailable (2nd cycle timed out)',
+  0x03:'ILLEGAL ACCESS — read across the border (bad address or length)',
+  0x04:'Parity/overflow/telegram error',
+  0x05:'Unknown command — this mode is not supported',
+  0x06:'XOR check incorrect',
+  0x07:'Simulation error — not supported in this mode',
+};
+// Read everything still sitting in the buffer and show it. Nothing gets swallowed.
+async function drain(tag,to=400){
+  const j=await xport.read(4096,to);
+  if(j.length) log('  '+tag+' trailing bytes ('+j.length+'): '+hex(j),'mut');
+  return j;
+}
 async function readBlock(addr, count){
   const cmd=new Uint8Array([0x05,(addr>>>24)&0xff,(addr>>>16)&0xff,(addr>>>8)&0xff,addr&0xff,(count>>8)&0xff,count&0xff]);
+  const A='0x'+addr.toString(16).padStart(8,'0');
+  log('→ '+hex(cmd)+'   (Read Block '+A+' ×'+count+')','mut');
   await xport.write(cmd);
-  const ack=await xport.read(1,1500);
-  if(ack.length<1||ack[0]!==0x06) throw new Error('Read Block not acked at 0x'+addr.toString(16)+' (got '+hex(ack)+')');
-  const data=await xport.read(count, 4000);
+
+  const t0=await xport.read(1,1500);
+  if(!t0.length){ await drain('(no response)'); throw new Error('Read Block '+A+': no response at all. Cable alive but LOGO! silent.'); }
+  log('← '+hex(t0)+'   (response type)','mut');
+
+  // NOK: exception response is exactly 2 bytes — 0x15 <errorcode>.
+  if(t0[0]===0x15){
+    const e=await xport.read(1,1500);
+    const code=e.length?e[0]:-1;
+    log('← '+hex(e)+'   (error code)','err');
+    await drain('after NOK');
+    throw new Error('LOGO! REJECTED the read at '+A+' — NOK 0x15, code 0x'+
+      (code<0?'??':code.toString(16).padStart(2,'0'))+': '+(CPU_ERR[code]||'unrecognised code'));
+  }
+  if(t0[0]!==0x06){
+    await drain('after unexpected');
+    throw new Error('Read Block '+A+': expected ACK 0x06 or NOK 0x15, got 0x'+t0[0].toString(16)+'.');
+  }
+
+  const data=await xport.read(count, 8000);
+  if(data.length<count){
+    log('  SHORT READ: asked '+count+', got '+data.length+' → '+hex(data.slice(0,32))+(data.length>32?' …':''),'err');
+    await drain('after short read');
+    throw new Error('Read Block '+A+': short read ('+data.length+'/'+count+' bytes). '+
+      (data.length===2&&data[0]===0x15?'Those 2 bytes are a NOK exception (0x15 '+
+        (CPU_ERR[data[1]]||'0x'+data[1].toString(16))+') that arrived after an ACK.':'LOGO! stopped sending mid-block.'));
+  }
   const cs=await xport.read(1,1500);
   let x=0; for(const d of data) x^=d;
+  if(!cs.length){ log('  no checksum byte received (computed XOR would be 0x'+x.toString(16).padStart(2,'0')+')','err'); }
   const okcs = cs.length&&cs[0]===x;
-  log('Read 0x'+addr.toString(16).padStart(8,'0')+' ×'+count+': got '+data.length+' bytes, XOR '+(okcs?'ok':'MISMATCH ('+hex(cs)+' vs '+x.toString(16)+')'), okcs?'ok':'err');
+  log('Read '+A+' ×'+count+': got '+data.length+' bytes, XOR '+
+    (okcs?'ok':'MISMATCH (received '+(cs.length?'0x'+cs[0].toString(16).padStart(2,'0'):'nothing')+
+     ' vs computed 0x'+x.toString(16).padStart(2,'0')+')'), okcs?'ok':'err');
+  if(!okcs) await drain('after checksum mismatch');
   return data;
 }
-async function sendStop(){ await xport.write(new Uint8Array([0x55,0x12,0x12,0xAA])); const r=await xport.read(4,1000); log('STOP → 55 12 12 AA  ← '+hex(r)); }
+// Operating mode. 55 17 17 AA -> 06 <mode>. Source: LogoPG.cpp GetPlcStatus/RecvControlResponse.
+const MODES={0x01:'RUN',0x20:'RUN_P (parameter mode)',0x42:'STOP'};
+async function getMode(){
+  await xport.read(4096,50);
+  await xport.write(new Uint8Array([0x55,0x17,0x17,0xAA]));
+  const r=await xport.read(2,1500);
+  log('→ 55 17 17 aa   ← '+(r.length?hex(r):'(nothing)'),'mut');
+  if(r.length<2||r[0]!==0x06){ await drain('mode'); throw new Error('Mode request not confirmed (got '+hex(r)+').'); }
+  const m=r[1], nm=MODES[m]||('unknown 0x'+m.toString(16));
+  log('Operating mode: '+nm+(m===0x42?'  ← good, memory reads need STOP':'  ← reads will be REJECTED; press “Send STOP”'), m===0x42?'ok':'err');
+  await drain('mode');
+  return m;
+}
+async function sendStop(){
+  await xport.read(4096,50);
+  await xport.write(new Uint8Array([0x55,0x12,0x12,0xAA]));
+  const r=await xport.read(1,1000);
+  log('→ 55 12 12 aa   ← '+(r.length?hex(r):'(nothing)'),'mut');
+  if(r.length&&r[0]===0x06) log('STOP acknowledged.','ok');
+  else if(r.length&&r[0]===0x15){ const e=await xport.read(1,800); log('STOP rejected: NOK code '+(e.length?(CPU_ERR[e[0]]||hex(e)):'?'),'err'); }
+  else log('STOP: unexpected response.','err');
+  await drain('stop');
+}
 
 // ========== UI ==========
 $('#connect').onclick=async()=>{
@@ -214,12 +287,13 @@ $('#connect').onclick=async()=>{
     else if('usb' in navigator){ log('Web Serial unavailable → using WebUSB (Android).','mut'); xport=await connectWebUSB(); }
     else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
     $('#status').textContent='connected ('+xport.kind+')'; $('#status').className='ok';
-    for(const id of ['#ident','#nametest','#stop','#dump','#decode']) $(id).disabled=false;
+    for(const id of ['#ident','#nametest','#mode','#stop','#dump','#decode']) $(id).disabled=false;
     log('Cable connected via '+xport.kind+'. Configured 9600 8E1.','ok');
   }catch(e){ log('Connect failed: '+e.message,'err'); }
 };
 $('#ident').onclick=()=>pgConnect().catch(e=>log(e.message,'err'));
-$('#stop').onclick=()=>sendStop().catch(e=>log(e.message,'err'));
+$('#mode').onclick=async()=>{ try{ await pgConnect(); await getMode(); }catch(e){ log(e.message,'err'); } };
+$('#stop').onclick=async()=>{ try{ await pgConnect(); await sendStop(); await getMode(); }catch(e){ log(e.message,'err'); } };
 $('#nametest').onclick=async()=>{ try{ await pgConnect(); const d=await readBlock(0x00FF0570,16); log('Program name: "'+[...d].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('')+'"', 'ok'); }catch(e){ log(e.message,'err'); } };
 $('#dump').onclick=async()=>{
   try{
