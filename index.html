@@ -34,6 +34,9 @@
   .ok{color:var(--ok)} .err{color:var(--err)} .mut{color:var(--mut)}
   code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:13px}
   .warn{border-left:3px solid #e0a800;padding-left:10px}
+  button.next:not(:disabled){box-shadow:0 0 0 3px color-mix(in srgb, var(--acc) 55%, transparent);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb, var(--acc) 30%, transparent)}50%{box-shadow:0 0 0 5px color-mix(in srgb, var(--acc) 45%, transparent)}}
+  #log .toolbar{display:flex;gap:8px;margin:8px 0 0}
 </style>
 </head>
 <body>
@@ -41,51 +44,64 @@
 <p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA6</b> over the serial PG protocol, in your browser. Desktop uses Web Serial; Android Chrome uses WebUSB. Nothing is uploaded — it all runs locally.</p>
 
 <div class="card warn">
-  <b>Before you start</b> — put the LOGO! in <b>STOP</b> (ESC → Stop on the device). Plug the USB cable in. On Android use an OTG adapter and <b>Chrome</b>. This is a first-cut, hardware-untested tool: watch the log, and if the program area comes back wrong, the "program name" self-test below tells you whether the address page is right.
-</div>
-
-<div class="row">
-  <button id="connect">Connect cable</button>
-  <span id="status" class="mut">not connected</span>
+  <b>Before you start</b> &mdash; plug the USB cable in, and put the LOGO! in <b>STOP</b> (ESC &rarr; Stop on the device; step 2 also does it). On Android use an OTG adapter and <b>Chrome</b>. Follow the numbered steps &mdash; the glowing button is the recommended next one. The log at the bottom records every byte; use <b>Copy log</b> to send it to me.
 </div>
 
 <div class="card">
+  <p class="mut" style="font-size:12.5px;margin:0 0 8px">Do these in order. Steps <b>3</b> and <b>5</b> write to the PLC and require a second click to confirm.</p>
   <div class="row">
-    <button id="ident" class="sec" disabled>1 · Identify (0x21)</button>
-    <button id="nametest" class="sec" disabled>2 · Read program name (self-test)</button>
-    <button id="restart" class="sec" disabled>Restart (0x22)</button>
-    <button id="probe" class="sec" disabled>Probe address space</button>
-    <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
-    <button id="findmem" class="sec" disabled>Find real memory map (Read Block probe)</button>
-    <button id="unlock" class="sec" disabled>⚠ Recover password &amp; unlock (writes to PLC)</button>
-    <button id="relock" class="sec" disabled>Re-lock (restore protection)</button>
-    <button id="abort" class="sec" disabled>Stop probe</button>
-    <button id="fw" class="sec" disabled>Read firmware (proves reads work)</button>
-    <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
-    <button id="stop" class="sec" disabled>Send STOP</button>
+    <button id="connect">1 &middot; Connect cable</button>
+    <button id="stop" disabled>2 &middot; Put in STOP</button>
+    <button id="unlock" disabled>3 &middot; Recover password &amp; unlock &#9888;</button>
+    <button id="decode" disabled>4 &middot; Read program &amp; decode</button>
+    <button id="relock" disabled>5 &middot; Re-lock &#9888;</button>
+    <button id="abort" class="sec" disabled>Stop</button>
+    <span id="status" class="mut">not connected</span>
   </div>
-  <div class="row">
-    <label>Start addr (hex) <input id="addr" value="00FF0EE8"></label>
-    <label>Length (bytes) <input id="len" value="2000"></label>
-    <button id="dump" disabled>3 · Dump program → .bin</button>
-  </div>
-  <p class="mut" style="font-size:12.5px;margin:6px 0 0">
-    Defaults assume the 0BA5 program map (<code>0x0EE8–0x16B7</code>, 2000 bytes) under the 0BA6 <code>0x00FF____</code> page. The name self-test reads <code>0x00FF0570</code> (16 bytes) — if it prints readable text, the page mapping is correct and the dump address is trustworthy. If not, the mapping needs adjusting; tell me what the self-test returned.
+  <p class="mut" style="font-size:12.5px;margin:8px 0 0">
+    Step 3 is only needed if the program is password-protected (the tool detects it): it recovers the password the 0BA6 stores in cleartext and lowers protection so step 4 can read; step 5 restores protection. No password &rarr; skip to step 4.
   </p>
 </div>
 
 <div class="card">
   <div class="row">
-    <button id="decode" disabled>4 · Read all + decode → netlist</button>
-    <button id="decfile" class="sec">Decode a saved .bin file…</button>
+    <button id="decfile" class="sec">Decode a saved .bin file&hellip;</button>
     <input type="file" id="binfile" accept=".bin" style="display:none">
+    <span class="mut" style="font-size:12.5px">&mdash; re-decode a saved dump offline, no cable needed</span>
   </div>
-  <p class="mut" style="font-size:12.5px;margin:6px 0 0">
-    Reads the pointer table (<code>0x0C14</code>), output/merker wiring (<code>0x0E20</code>) and program memory (<code>0x0EE8</code>), then walks every block and prints a human-readable netlist. Basic gates (AND/OR/NOT/…) are decoded exactly; special-function <b>wiring</b> is resolved but their numeric parameters (timer values etc.) are shown raw for now.
-  </p>
   <pre id="netlist" style="white-space:pre;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;overflow:auto;max-height:340px;margin:10px 0 0"></pre>
 </div>
 
+<details style="margin:12px 0">
+  <summary style="cursor:pointer;color:var(--acc)">Advanced / diagnostics</summary>
+  <div class="card" style="margin-top:8px">
+    <div class="row">
+      <button id="ident" class="sec" disabled>Identify (0x21)</button>
+      <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
+      <button id="restart" class="sec" disabled>Restart (0x22)</button>
+      <button id="fw" class="sec" disabled>Read firmware</button>
+      <button id="nametest" class="sec" disabled>Read program name</button>
+      <button id="findmem" class="sec" disabled>Find real memory map</button>
+      <button id="probe" class="sec" disabled>Probe address space</button>
+      <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
+    </div>
+    <div class="row">
+      <label>Start addr (hex) <input id="addr" value="00FF0EE8"></label>
+      <label>Length (bytes) <input id="len" value="2000"></label>
+      <button id="dump" class="sec" disabled>Dump raw region &rarr; .bin</button>
+    </div>
+    <p class="mut" style="font-size:12.5px;margin:6px 0 0">
+      Debugging aids. On a 0BA6.ES10 the program lives at <code>0x00FF0EE8</code> under the <code>0x00FF____</code> page; reads use single-byte Read Byte because Read Block is rejected on this hardware. Read Byte returns <code>0x00</code> for protected/unmapped memory (it does not fault), so an all-zero region means "protected or empty," not "read failed."
+    </p>
+  </div>
+</details>
+
+<div class="row" style="margin-bottom:0">
+  <button id="copylog" class="sec">Copy log</button>
+  <button id="dllog" class="sec">Download log</button>
+  <button id="clearlog" class="sec">Clear</button>
+  <span id="filenote" class="mut" style="font-size:12px"></span>
+</div>
 <div id="log"></div>
 
 <details style="margin:16px 0;font-size:13px">
@@ -105,8 +121,19 @@
 <script>
 const $ = s => document.querySelector(s);
 const logEl = $('#log');
-function log(m, cls){ const s=document.createElement('span'); if(cls)s.className=cls; s.textContent=m+'\n'; logEl.appendChild(s); logEl.scrollTop=logEl.scrollHeight; }
+// Plain-text mirror of the log so Copy/Download give exact text, not scraped DOM.
+const logLines = [];
+function log(m, cls){ logLines.push(m); const s=document.createElement('span'); if(cls)s.className=cls; s.textContent=m+'\n'; logEl.appendChild(s); logEl.scrollTop=logEl.scrollHeight; }
 function hex(b){ return [...b].map(x=>x.toString(16).padStart(2,'0')).join(' '); }
+// Known USB-serial bridge vendor IDs — for a friendly hint only, NEVER a hiding filter.
+// Genuine and clone LOGO! cables use various bridges (FTDI / CP210x / CH340 / Prolific);
+// there is no single authoritative LOGO! cable VID, so we identify, we don't filter.
+const CHIPS={0x0403:'FTDI',0x10c4:'Silicon Labs CP210x',0x1a86:'WCH CH340/CH341',0x067b:'Prolific PL2303'};
+function chipHint(vid){
+  if(vid==null) return '';
+  return CHIPS[vid] ? '  (chip: '+CHIPS[vid]+' — a common USB-serial bridge, consistent with a LOGO! cable)'
+                    : '  (USB vendor 0x'+vid.toString(16).padStart(4,'0')+' — not a chip I recognise; trying anyway)';
+}
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const id4 = v => '0x'+v.toString(16).padStart(4,'0');
 function usbName(d){
@@ -121,8 +148,11 @@ let xport = null;
 
 // ========== Web Serial (desktop) ==========
 async function connectWebSerial(){
+  // No filter: the serial-port chooser only lists serial adapters (never mice/webcams),
+  // so filtering can only re-hide the user's cable — the exact bug we hit before.
   const port = await navigator.serial.requestPort();
   await port.open({ baudRate:9600, dataBits:8, parity:'even', stopBits:1 });
+  try{ const info=port.getInfo?port.getInfo():{}; log('serial port opened'+chipHint(info.usbVendorId), 'mut'); }catch(_){}
   const reader = port.readable.getReader();
   let buf = new Uint8Array(0);
   const pump = (async()=>{ try{ for(;;){ const {value,done}=await reader.read(); if(done)break; if(value){ const n=new Uint8Array(buf.length+value.length); n.set(buf); n.set(value,buf.length); buf=n; } } }catch(e){} })();
@@ -353,9 +383,10 @@ async function recoverPasswordAndUnlock(){
   abortProbe=false; // clear any stale Stop from an earlier probe, else readRegion aborts
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Needs STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Needs STOP mode — press “2 · Put in STOP” first.','err'); return; }
   const exists=await readByte(0x00FF48FF);
-  if(exists!==0x40){ log('Password byte @48FF = 0x'+exists.toString(16)+' — no protection to recover. Just dump.','ok'); return; }
+  st.protected=(exists===0x40);
+  if(exists!==0x40){ log('Password byte @48FF = 0x'+exists.toString(16)+' — no protection to recover. Skip to “4 · Read program & decode”.','ok'); applyState(); return; }
   // Confirm the magic bytes BEFORE writing anything, as the reference does — this proves
   // we're really looking at a password state and not misreading the device.
   const g1=await readByte(0x00FF1F00), g2=await readByte(0x00FF1F01);
@@ -366,7 +397,7 @@ async function recoverPasswordAndUnlock(){
   await writeByte(0x00FF4740, 0x00);
   // From here the PLC is unprotected. Record that immediately and guarantee the warning
   // prints no matter what fails below, so the device is never silently left unlocked.
-  unlocked=true;
+  st.unlocked=true; st.protected=true;
   try{
     // Read the 10-byte cleartext password with the BYTE-WISE path (Read Byte), which is
     // proven on this hardware. Read Block is rejected on this 0BA6.ES10 even for legal
@@ -380,7 +411,7 @@ async function recoverPasswordAndUnlock(){
     log('Verifying read access to the program area…','mut');
     const test=await readRegion(0x00FF0EE8, 16, 'program probe');
     let nz=0; for(const d of test) if(d) nz++;
-    if(nz>0) log('Read access OPEN — 0x00FF0EE8 returns real data now ('+nz+'/16 non-zero: '+hex(test)+'). Run “Read all + decode”.','ok');
+    if(nz>0) log('Read access OPEN — 0x00FF0EE8 returns real data now ('+nz+'/16 non-zero: '+hex(test)+'). Run “4 · Read program & decode”.','ok');
     else log('Still all zero at 0x00FF0EE8 after unlock — the program may live elsewhere; run “Find real memory map”.','err');
     // Bonus datapoint: does unlocking also make Read Block work? Purely informational.
     try{ await readBlockRaw(0x00FF0EE8, 16); log('(Read Block also works now.)','mut'); }catch(_){ log('(Read Block still rejected even unprotected — a genuine device quirk, but Read Byte covers us.)','mut'); }
@@ -390,7 +421,6 @@ async function recoverPasswordAndUnlock(){
 }
 // Restore read/write protection (level 3). The password stored at 0566 is untouched, so
 // the original password protection is reinstated. Source: ADDR_PL_W_LEVEL3 in LogoPG.cpp.
-let unlocked=false;
 async function relock(){
   await pgRestart(); await pgConnect();
   const m=await getMode(); if(m!==0x42){ log('Needs STOP mode.','err'); return; }
@@ -398,7 +428,7 @@ async function relock(){
   const chk=await readByte(0x00FF48FF);
   log('Re-locked. Password byte @48FF = 0x'+chk.toString(16)+(chk===0x40?' (password protection restored).':' (unexpected).'),chk===0x40?'ok':'err');
   log('Note: this restores level 3 (read+write protection) with your existing password. If your device was originally level 2 (read-only protection), it is now slightly more locked; reset the exact level in LOGO!Soft if it matters.','mut');
-  unlocked=false;
+  st.unlocked=false; st.protected=(chk===0x40);
 }
 // Firmware read: proves single-byte reads work at all, independent of Read Block.
 // Field layout follows the ADDR_OC_* constants in LogoPG.cpp: 1F03='V', 1F04=major,
@@ -486,6 +516,7 @@ async function checkPassword(){
   const m1=await readByte(0x00FF1F00), m2=await readByte(0x00FF1F01);
   log('Password magic @1F00/1F01 = 0x'+m1.toString(16)+'/0x'+m2.toString(16)+'  (documented: 0x04/0x00)',
       (m1===0x04&&m2===0x00)?'ok':'mut');
+  st.protected=(p===0x40); applyState();
   return p;
 }
 // Characterise Read Block: is it the address, the count, or the address width?
@@ -561,8 +592,9 @@ async function getMode(){
   log('→ 55 17 17 aa   ← '+(r.length?hex(r):'(nothing)'),'mut');
   if(r.length<2||r[0]!==0x06){ await drain('mode'); throw new Error('Mode request not confirmed (got '+hex(r)+').'); }
   const m=r[1], nm=MODES[m]||('unknown 0x'+m.toString(16));
-  log('Operating mode: '+nm+(m===0x42?'  ← good, memory reads need STOP':'  ← reads will be REJECTED; press “Send STOP”'), m===0x42?'ok':'err');
+  log('Operating mode: '+nm+(m===0x42?'  ← good, memory reads need STOP':'  ← reads will be REJECTED; press “2 · Put in STOP”'), m===0x42?'ok':'err');
   await drain('mode');
+  st.stopped=(m===0x42); applyState();
   return m;
 }
 async function sendStop(){
@@ -577,6 +609,30 @@ async function sendStop(){
 }
 
 // ========== UI ==========
+// Simple observed-state, not a state machine: four booleans updated as we learn them.
+const st={ connected:false, stopped:false, protected:null, unlocked:false, dumped:false };
+// Single source of truth for which buttons are enabled and which one glows "do this next".
+function applyState(){
+  st.connected=!!xport;
+  const S=st, C=S.connected, ST=C&&S.stopped;
+  const en={
+    connect:!C,
+    stop:C, mode:C, ident:C, restart:C, fw:C,
+    unlock: ST && S.protected!==false && !S.unlocked,
+    decode:ST, dump:ST, nametest:ST, findmem:ST, probe:ST, blockdiag:ST,
+    relock: ST && S.unlocked,
+    abort:true, decfile:true, copylog:true, dllog:true, clearlog:true,
+  };
+  document.querySelectorAll('button[id]').forEach(b=>{ if(b.id in en) b.disabled=!en[b.id]; });
+  // Recommended next: first rule that matches.
+  let next=null;
+  if(!C) next='connect';
+  else if(!S.stopped) next='stop';
+  else if(S.protected===true && !S.unlocked) next='unlock';
+  else if(!S.dumped) next='decode';
+  else if(S.unlocked) next='relock';
+  document.querySelectorAll('button').forEach(b=>b.classList.toggle('next', b.id===next && !b.disabled));
+}
 // One serial port, one conversation. Without this, clicking a second button while a
 // read is in flight lets the two handlers interleave on the port and eat each other's
 // bytes -- which looks exactly like a hardware fault ("SHORT READ: asked 16, got 0").
@@ -588,39 +644,46 @@ function guard(fn){
     document.querySelectorAll('button').forEach(b=>{ if(b.id!=='abort') b.disabled=true; });
     try{ await fn(); }
     catch(e){ log(e.message,'err'); }
-    finally{
-      busy=false;
-      document.querySelectorAll('button').forEach(b=>{ if(b.id!=='connect'||!xport) b.disabled=false; });
-      if(!xport) document.querySelectorAll('button[id]').forEach(b=>{ if(!['connect','decfile'].includes(b.id)) b.disabled=true; });
-    }
+    finally{ busy=false; applyState(); }
+  };
+}
+// Two-click confirm for the two commands that WRITE to the PLC. First click arms for 4s;
+// second click within the window performs the write. Self-resetting, per-press.
+function armWrite(id, run){
+  const btn=$('#'+id);
+  btn.onclick=()=>{
+    if(busy){ log('Busy — wait for the current operation to finish.','err'); return; }
+    if(btn.dataset.armed){ clearTimeout(+btn.dataset.tmr); delete btn.dataset.armed; btn.textContent=btn.dataset.label; run(); return; }
+    btn.dataset.label=btn.textContent; btn.dataset.armed='1';
+    btn.textContent='Click again to WRITE to the PLC';
+    btn.dataset.tmr=setTimeout(()=>{ if(btn.dataset.armed){ delete btn.dataset.armed; btn.textContent=btn.dataset.label; } },4000);
   };
 }
 $('#connect').onclick=async()=>{
   try{
+    $('#connect').disabled=true;
     if('serial' in navigator){ log('Using Web Serial (desktop).','mut'); xport=await connectWebSerial(); }
     else if('usb' in navigator){ log('Web Serial unavailable → using WebUSB (Android).','mut'); xport=await connectWebUSB(); }
     else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
     $('#status').textContent='connected ('+xport.kind+')'; $('#status').className='ok';
-    // Derive from the DOM rather than a hand-kept list -- a hardcoded list silently
-    // strands any button added later (which is exactly what happened to #probe).
-    document.querySelectorAll('button[disabled]').forEach(b=>{ if(b.id!=='connect') b.disabled=false; });
     log('Cable connected via '+xport.kind+'. Configured 9600 8E1.','ok');
     // A 0BA6 stays wedged in its error state across reconnects (only 0x22 or a power
     // cycle clears it), so a previous failed session would poison this one too.
     log('Clearing any leftover error state from a previous session…','mut');
     await pgRestart();
-  }catch(e){ log('Connect failed: '+e.message,'err'); }
+    st.connected=true; applyState();
+  }catch(e){ log('Connect failed: '+e.message,'err'); applyState(); }
 };
 $('#ident').onclick=guard(async()=>{ await pgConnect(); });
 $('#restart').onclick=guard(async()=>{ await pgRestart(); await pgConnect(); });
 $('#abort').onclick=()=>{ abortProbe=true; log('Stopping…','mut'); };
 $('#blockdiag').onclick=guard(blockDiag);
-$('#unlock').onclick=guard(recoverPasswordAndUnlock);
-$('#relock').onclick=guard(relock);
+armWrite('unlock', guard(recoverPasswordAndUnlock));
+armWrite('relock', guard(relock));
 $('#findmem').onclick=guard(async()=>{
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Needs STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Needs STOP mode — press “2 · Put in STOP” first.','err'); return; }
   await checkPassword();
   log('— Read Byte says every page is readable, but the 0BA5 program offsets dumped 2460 zeros. —','mut');
   log('— Read Byte returns 0x00 for unmapped memory; Read Block faults. Trusting Read Block. —','mut');
@@ -629,7 +692,7 @@ $('#findmem').onclick=guard(async()=>{
 $('#probe').onclick=guard(async()=>{
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Probe needs STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Probe needs STOP mode — press “2 · Put in STOP” first.','err'); return; }
   // Sanity-anchor on 1F02, the one address proven to work on real 0BA6 hardware.
   log('Anchor check: reading the known-good ident byte at 0x00FF1F02…','mut');
   try{ const id=await readByte(0x00FF1F02); log('Anchor OK — 0x00FF1F02 = 0x'+id.toString(16)+'. Read Byte works, so misses below are real.','ok'); }
@@ -639,7 +702,7 @@ $('#probe').onclick=guard(async()=>{
 $('#fw').onclick=guard(async()=>{
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Firmware reads need STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Firmware reads need STOP mode — press “2 · Put in STOP” first.','err'); return; }
   await readFirmware();
 });
 $('#mode').onclick=guard(async()=>{ await pgConnect(); await getMode(); });
@@ -650,7 +713,7 @@ $('#nametest').onclick=guard(async()=>{
   abortProbe=false;
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Reads need STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Reads need STOP mode — press “2 · Put in STOP” first.','err'); return; }
   const d=await readRegion(0x00FF0570,16,'program name');
   log('Program name: "'+[...d].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('')+'"', 'ok');
 });
@@ -658,13 +721,15 @@ $('#dump').onclick=guard(async()=>{
   abortProbe=false;
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Reads need STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Reads need STOP mode — press “2 · Put in STOP” first.','err'); return; }
   const addr=parseInt($('#addr').value,16), len=parseInt($('#len').value,10);
   if(!(addr>=0) || !(len>0)){ log('Bad address or length.','err'); return; }
   const data=await readRegion(addr,len,'dump');
+  let nz=0; for(const d of data) if(d) nz++;
+  if(nz===0){ log('Region is entirely 0x00 — protected/unmapped/empty. Nothing saved. (Unlock via step 3 if the program is protected.)','err'); return; }
   const blob=new Blob([data],{type:'application/octet-stream'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='logo_0ba6_'+$('#addr').value+'_'+len+'.bin'; a.click();
-  log('Saved '+data.length+' bytes.','ok');
+  log('Saved '+data.length+' bytes ('+nz+' non-zero).','ok');
 });
 // ========== Decoder (0BA5/0BA6 block format) ==========
 // Connector word (little-endian) -> signal name. null = unused (FFFF).
@@ -741,20 +806,35 @@ async function readAllAndDecode(){
   abortProbe=false;
   await pgRestart(); await pgConnect();
   const m=await getMode();
-  if(m!==0x42){ log('Reads need STOP mode — press “Send STOP” first.','err'); return; }
+  if(m!==0x42){ log('Reads need STOP mode — press “2 · Put in STOP” first.','err'); return; }
+  // Pre-flight: if protected and not yet unlocked, reads would be all zeros. Stop BEFORE
+  // the 30-60s read and before writing any file, and point at step 3.
+  const prot=await readByte(0x00FF48FF); st.protected=(prot===0x40); applyState();
+  if(prot===0x40 && !st.unlocked){
+    log('Program is PASSWORD-PROTECTED (0x00FF48FF=0x40) and not unlocked — a read would return all zeros. Press “3 · Recover password & unlock” first. Nothing read or saved.','err');
+    return;
+  }
   // Read Block is rejected (15 03) on this 0BA6.ES10 even at addresses the prober
   // shows are readable, so read byte-by-byte with Read Byte, which is confirmed
   // working everywhere. ~2460 bytes at 9600 baud ≈ half a minute.
   log('Reading pointer table, wiring, and program via Read Byte (~2460 bytes, ~30-60s)…','mut');
-  log('Press “Stop probe” to abort.','mut');
+  log('Press “Stop” to abort.','mut');
   const ptr=await readRegion(0x00FF0C14,260,'pointer table');
   const term=await readRegion(0x00FF0E20,200,'output wiring');
   const prog=await readRegion(0x00FF0EE8,2000,'program');
+  // Post-read guard: never save a bogus all-zero file that only looks like a success.
+  let nz=0; for(const d of prog) if(d) nz++;
+  if(nz===0){
+    log('Program region is ENTIRELY 0x00 — device is protected or the program is empty. Nothing saved. (If protected, run step 3; if you expected a program, check it is actually loaded on the device.)','err');
+    $('#netlist').textContent='(program region is all zero — nothing to decode)';
+    return;
+  }
+  if(nz<16) log('Only '+nz+'/2000 non-zero program bytes — this looks nearly empty, but saving anyway.','err');
   const full=new Uint8Array(2460); full.set(ptr,0); full.set(term,260); full.set(prog,460);
-  // offer combined download for offline re-decode
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([full])); a.download='logo_0ba6_full.bin'; a.click();
   $('#netlist').textContent=decodeCombined(full);
-  log('Decoded. Combined dump saved as logo_0ba6_full.bin (re-decodable with the file button).','ok');
+  st.dumped=true; applyState();
+  log('Decoded. Combined dump saved as logo_0ba6_full.bin ('+nz+' non-zero program bytes; re-decodable with the file button).','ok');
 }
 $('#decode').onclick=guard(readAllAndDecode);
 $('#decfile').onclick=()=>$('#binfile').click();
@@ -766,7 +846,29 @@ $('#binfile').onchange=async(e)=>{
   log('Decoded '+f.name+'.','ok');
 };
 
+// ---- Log toolbar ----
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); return true; }
+  catch(_){ // fallback for non-secure contexts (e.g. file://)
+    const ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    let ok=false; try{ ok=document.execCommand('copy'); }catch(__){}
+    document.body.removeChild(ta); return ok;
+  }
+}
+$('#copylog').onclick=async()=>{
+  const ok=await copyText(logLines.join('\n'));
+  log(ok?'(log copied to clipboard)':'(copy failed — select the log text and copy manually)', ok?'ok':'err');
+};
+$('#dllog').onclick=()=>{
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([logLines.join('\n')],{type:'text/plain'}));
+  a.download='logo_session.log'; a.click();
+};
+$('#clearlog').onclick=()=>{ logLines.length=0; logEl.replaceChildren(); };
+
 if(!('serial' in navigator) && !('usb' in navigator)) log('This browser has neither Web Serial nor WebUSB. Use Chrome/Edge (desktop) or Chrome (Android).','err');
+if(location.protocol==='file:') $('#filenote').textContent='Opened as a local file — clipboard copy may be blocked; use Download log if Copy fails.';
+applyState();
 </script>
 </body>
 </html>
