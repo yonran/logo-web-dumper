@@ -96,6 +96,7 @@
       <button id="findmem" class="sec" disabled>Find real memory map</button>
       <button id="probe" class="sec" disabled>Probe address space</button>
       <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
+      <button id="unlocknoreneg" class="sec" disabled>Unlock (no re-negotiate) &#9888;</button>
     </div>
     <div class="row">
       <label>Start addr (hex) <input id="addr" value="00FF0EE8"></label>
@@ -451,6 +452,47 @@ async function recoverPasswordAndUnlock(){
     log('⚠️ A protection-level write was sent (level 1). Press “5 · Re-lock” to restore protection when done.','err');
   }
 }
+// EXPERIMENT (2026-07-16): the reference SetSessionPassword() writes 0x4740=0 and then
+// reads 0x0566 IMMEDIATELY, in the SAME session — no Restart, no re-negotiate in between.
+// recoverPasswordAndUnlock() above deviates: it inserts pgRestart()+pgConnect() between
+// the write and the read, on a guess that protection "takes effect at connect time". But
+// Restart re-initialises the session and the lowered level is known to be transient, so
+// that inserted re-negotiate may REVERT the protection level and re-lock the device before
+// the read — which would exactly produce the observed "write ACKed, 0566 still zero".
+// This variant mirrors the reference literally to test that hypothesis. Establish a clean
+// STOP session ONCE, then write→read back-to-back with nothing in between.
+async function recoverNoReneg(){
+  abortProbe=false;
+  log('— EXPERIMENT: write 0x4740=0 then read 0x0566 in the SAME session (no re-negotiate), mirroring SetSessionPassword() exactly. —','mut');
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Needs STOP mode — press “2 · Put in STOP” first.','err'); return; }
+  const exists=await readByte(0x00FF48FF);
+  st.protected=(exists===0x40);
+  if(exists!==0x40){ log('Password byte @48FF = 0x'+exists.toString(16)+' — no protection to recover.','ok'); applyState(); return; }
+  const g1=await readByte(0x00FF1F00), g2=await readByte(0x00FF1F01);
+  if(g1!==0x04||g2!==0x00){ log('Magic bytes unexpected (0x'+g1.toString(16)+'/0x'+g2.toString(16)+'); aborting BEFORE any write.','err'); return; }
+  log('Magic OK. Writing 0x00FF4740=0x00 and reading 0x00FF0566 back-to-back — NO restart in between.','mut');
+  await writeByte(0x00FF4740, 0x00);
+  st.unlocked=true; st.protected=true;
+  try{
+    // The crux: NO pgRestart / pgConnect here. Read straight away in the same session.
+    const pw=await readRegion(0x00FF0566, 10, 'password area (no-reneg)');
+    const pwnz=[...pw].some(b=>b);
+    const ascii=[...pw].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('');
+    log('Password area @0x00FF0566 (same session): '+(pwnz?'"'+ascii.replace(/·+$/,'')+'"  raw '+hex(pw):'still all zero')+'', pwnz?'ok':'err');
+    log('Reading program area 0x00FF0EE8 in the same session…','mut');
+    const test=await readRegion(0x00FF0EE8, 16, 'program probe (no-reneg)');
+    let nz=0; for(const d of test) if(d) nz++;
+    if(pwnz||nz>0){
+      log('RESULT: reads returned real data WITHOUT a re-negotiate ('+nz+'/16 program bytes non-zero: '+hex(test)+'). The inserted Restart in step 3 was defeating the unlock. Use step 4 to dump.','ok');
+    } else {
+      log('RESULT: still all zero even back-to-back in the same session. The re-negotiate was NOT the cause — this firmware genuinely holds read protection after a level-1 write.','err');
+    }
+  } finally {
+    log('⚠️ A protection-level write was sent (level 1). Press “5 · Re-lock” to restore protection when done.','err');
+  }
+}
 // Restore read/write protection (level 3). The password stored at 0566 is untouched, so
 // the original password protection is reinstated. Source: ADDR_PL_W_LEVEL3 in LogoPG.cpp.
 async function relock(){
@@ -652,6 +694,7 @@ function applyState(){
     stop:C, mode:C, ident:C, restart:C, fw:C,
     unlock: ST && S.protected!==false && !S.unlocked,
     decode:ST, dump:ST, nametest:ST, findmem:ST, probe:ST, blockdiag:ST,
+    unlocknoreneg: ST && S.protected!==false && !S.unlocked,
     // Re-lock is safe whenever a password EXISTS on the device (protected===true) or we
     // unlocked this session. It does NOT depend on this-session unlock state, so a fresh
     // session (or a different computer) can re-lock a device left unprotected earlier.
@@ -744,6 +787,7 @@ $('#restart').onclick=guard(async()=>{ await pgRestart(); await pgConnect(); });
 $('#abort').onclick=()=>{ abortProbe=true; log('Stopping…','mut'); };
 $('#blockdiag').onclick=guard(blockDiag);
 armWrite('unlock', guard(recoverPasswordAndUnlock));
+armWrite('unlocknoreneg', guard(recoverNoReneg));
 armWrite('relock', guard(relock));
 $('#findmem').onclick=guard(async()=>{
   await pgRestart(); await pgConnect();
@@ -776,7 +820,13 @@ $('#stop').onclick=guard(async()=>{
   // Learn the protection state now, so unlock/re-lock enable correctly even in a fresh
   // session that didn't run a read or an unlock yet.
   if(m===0x42){ const p=await readByte(0x00FF48FF); st.protected=(p===0x40);
-    log('Password '+(p===0x40?'IS set (0x48FF=0x40) — use step 3 to unlock, step 5 to re-lock.':'is not set (0x48FF=0x'+p.toString(16)+').'), p===0x40?'mut':'ok'); applyState(); }
+    log('Password '+(p===0x40?'IS set (0x48FF=0x40) — use step 3 to unlock, step 5 to re-lock.':'is not set (0x48FF=0x'+p.toString(16)+').'), p===0x40?'mut':'ok');
+    // Reversibility across refresh/reconnect: 0x48FF reports only that a password EXISTS, not
+    // the current protection LEVEL. So we CANNOT tell from the device whether an unlock earlier
+    // this session — or in a previous session / before a page refresh — left it at level 1
+    // (unprotected). Make that unknowable-state explicit rather than pretend it's re-locked.
+    if(p===0x40) log('Note: the device can report that a password exists but NOT the current protection level. If you (or an earlier session/refresh) ran an unlock, this LOGO! may still be UNPROTECTED right now — press “5 · Re-lock” to be certain. Re-lock works cross-session.','err');
+    applyState(); }
 });
 // Read Byte, not Read Block: Read Block is rejected on this hardware even at addresses
 // the prober shows are readable.
