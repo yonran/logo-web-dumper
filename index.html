@@ -427,24 +427,28 @@ async function recoverPasswordAndUnlock(){
   // prints no matter what fails below, so the device is never silently left unlocked.
   st.unlocked=true; st.protected=true;
   try{
-    // Read the 10-byte cleartext password with the BYTE-WISE path (Read Byte), which is
-    // proven on this hardware. Read Block is rejected on this 0BA6.ES10 even for legal
-    // ranges, so using it here would throw and strand the flow.
+    // The device appears to latch its protection level at connection (0x21) time, so a
+    // mid-session level change may not take effect until we re-negotiate. Reconnect.
+    log('Re-negotiating the session so the new protection level takes effect…','mut');
+    await pgRestart(); await pgConnect(); await getMode();
+    // Read the 10-byte password area with Read Byte (proven on this hardware; Read Block
+    // faults here). If protection truly lifted, real bytes appear; if still 0x00, it didn't.
     const pw=await readRegion(0x00FF0566, 10, 'password area');
+    const pwnz=[...pw].some(b=>b);
     const ascii=[...pw].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('');
-    log('STORED PASSWORD (cleartext, 10 bytes): "'+ascii.replace(/·+$/,'')+'"','ok');
-    log('  raw: '+hex(pw),'mut');
-    // Verify read access is now open using the SAME command the dump uses (Read Byte),
-    // so a real success can't be reported as a failure.
+    log('Password area @0x00FF0566: '+(pwnz?'"'+ascii.replace(/·+$/,'')+'"  raw '+hex(pw):'still all zero — password NOT readable')+'', pwnz?'ok':'err');
     log('Verifying read access to the program area…','mut');
     const test=await readRegion(0x00FF0EE8, 16, 'program probe');
     let nz=0; for(const d of test) if(d) nz++;
-    if(nz>0) log('Read access OPEN — 0x00FF0EE8 returns real data now ('+nz+'/16 non-zero: '+hex(test)+'). Run “4 · Read program & decode”.','ok');
-    else log('Still all zero at 0x00FF0EE8 after unlock — the program may live elsewhere; run “Find real memory map”.','err');
-    // Bonus datapoint: does unlocking also make Read Block work? Purely informational.
-    try{ await readBlockRaw(0x00FF0EE8, 16); log('(Read Block also works now.)','mut'); }catch(_){ log('(Read Block still rejected even unprotected — a genuine device quirk, but Read Byte covers us.)','mut'); }
+    if(nz>0){
+      log('Read access OPEN — 0x00FF0EE8 returns real data now ('+nz+'/16 non-zero: '+hex(test)+'). Run “4 · Read program & decode”.','ok');
+    } else {
+      log('UNLOCK DID NOT TAKE: the program and password areas still read all-zero after the protection write + reconnect.','err');
+      log('This 0BA6.ES10 (firmware V1.07.07) is not giving up read access the way the 0BA5 cleartext-password trick assumes — its read protection appears to actually hold.','err');
+      log('Options: (a) power-cycle the LOGO, reconnect, and try step 3 again (some protection changes need a reboot); (b) if you KNOW the password, that opens other routes; (c) otherwise the protected program may not be dumpable without LOGO!Soft + the password.','mut');
+    }
   } finally {
-    log('⚠️ The PLC is now at protection level 1 (UNPROTECTED). Dump now, then press “Re-lock” to restore protection.','err');
+    log('⚠️ A protection-level write was sent (level 1). Press “5 · Re-lock” to restore protection when done.','err');
   }
 }
 // Restore read/write protection (level 3). The password stored at 0566 is untouched, so
@@ -668,16 +672,26 @@ function applyState(){
 // read is in flight lets the two handlers interleave on the port and eat each other's
 // bytes -- which looks exactly like a hardware fault ("SHORT READ: asked 16, got 0").
 let busy=false;
+// Buttons that never touch the serial port and so stay usable during an operation.
+const ALWAYS_ON=['abort','copylog','dllog','clearlog'];
 function guard(fn){
   return async()=>{
     if(busy){ log('Busy — wait for the current operation to finish (or press “Stop”).','err'); return; }
     busy=true;
-    document.querySelectorAll('button').forEach(b=>{ if(b.id!=='abort') b.disabled=true; });
+    document.querySelectorAll('button').forEach(b=>{ if(!ALWAYS_ON.includes(b.id)) b.disabled=true; });
     try{ await fn(); }
     catch(e){ log(e.message,'err'); }
     finally{ busy=false; applyState(); }
   };
 }
+// Mobile suspends background tabs, which stalls the USB I/O a long operation is awaiting.
+// If we get backgrounded mid-run, abort cleanly instead of freezing in a stuck-busy state.
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden && busy){
+    abortProbe=true;
+    log('⚠ Page backgrounded during an operation — aborting it. Mobile suspends background tabs, which stalls USB. Keep this tab in the foreground during reads/probes.','err');
+  }
+});
 // Two-click confirm for the two commands that WRITE to the PLC. First click arms for 4s;
 // second click within the window performs the write. Self-resetting, per-press.
 const ARM_MS=10000;
