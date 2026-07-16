@@ -165,12 +165,14 @@ async function connectWebSerial(){
 }
 
 // ========== WebUSB (Android) — minimal chip drivers ==========
-// Deliberately NO vendor filter: an unknown-VID cable would otherwise be hidden and the
-// picker would just say "No compatible devices found". Show everything, identify after.
+// Show EVERY device and identify after, so an unknown-VID cable is never hidden.
+// The "show all" idiom is filters:[{}] — a list with ONE EMPTY filter object (matches
+// everything). filters:[] (an empty list) matches NOTHING and produces the misleading
+// "No compatible devices found", which is the opposite of what we want.
 async function connectWebUSB(){
   const known = await navigator.usb.getDevices();
   log('previously-authorised devices: ' + (known.length ? known.map(usbName).join(', ') : '(none)'), 'mut');
-  const dev = await navigator.usb.requestDevice({filters:[]});
+  const dev = await navigator.usb.requestDevice({filters:[{}]});
   log('picked: ' + usbName(dev), 'ok');
   log('  class '+dev.deviceClass+'/'+dev.deviceSubclass+'/'+dev.deviceProtocol, 'mut');
   await dev.open();
