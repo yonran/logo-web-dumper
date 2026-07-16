@@ -151,8 +151,11 @@ async function connectWebSerial(){
   // No filter: the serial-port chooser only lists serial adapters (never mice/webcams),
   // so filtering can only re-hide the user's cable — the exact bug we hit before.
   const port = await navigator.serial.requestPort();
+  // Report exactly which port the user picked, before we open it.
+  let info={}; try{ info=port.getInfo?port.getInfo():{}; }catch(_){}
+  if(info.usbVendorId!=null) log('selected serial port: '+id4(info.usbVendorId)+':'+id4(info.usbProductId==null?0:info.usbProductId)+chipHint(info.usbVendorId), 'ok');
+  else log('selected serial port: (no USB VID/PID reported — built-in or Bluetooth serial)', 'mut');
   await port.open({ baudRate:9600, dataBits:8, parity:'even', stopBits:1 });
-  try{ const info=port.getInfo?port.getInfo():{}; log('serial port opened'+chipHint(info.usbVendorId), 'mut'); }catch(_){}
   const reader = port.readable.getReader();
   let buf = new Uint8Array(0);
   const pump = (async()=>{ try{ for(;;){ const {value,done}=await reader.read(); if(done)break; if(value){ const n=new Uint8Array(buf.length+value.length); n.set(buf); n.set(value,buf.length); buf=n; } } }catch(e){} })();
@@ -173,7 +176,7 @@ async function connectWebUSB(){
   const known = await navigator.usb.getDevices();
   log('previously-authorised devices: ' + (known.length ? known.map(usbName).join(', ') : '(none)'), 'mut');
   const dev = await navigator.usb.requestDevice({filters:[{}]});
-  log('picked: ' + usbName(dev), 'ok');
+  log('selected USB device: ' + usbName(dev) + chipHint(dev.vendorId), 'ok');
   log('  class '+dev.deviceClass+'/'+dev.deviceSubclass+'/'+dev.deviceProtocol, 'mut');
   await dev.open();
   if(!dev.configuration) await dev.selectConfiguration(1);
