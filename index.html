@@ -677,7 +677,21 @@ $('#connect').onclick=async()=>{
     log('Clearing any leftover error state from a previous session…','mut');
     await pgRestart();
     st.connected=true; applyState();
-  }catch(e){ log('Connect failed: '+e.message,'err'); applyState(); }
+  }catch(e){
+    log('Connect failed: '+e.message,'err');
+    // On Android/WebUSB a NotFoundError from an empty picker means the phone never
+    // enumerated the cable over OTG -- the cable is invisible below the browser.
+    const usbOnly = !('serial' in navigator) && ('usb' in navigator);
+    if(usbOnly && /NotFoundError|No device selected/i.test(e.name+' '+e.message)){
+      log('The picker had NO devices to choose from, so Android is not seeing the cable through the OTG adapter (not a tool problem).','err');
+      log('  Check, in order: (1) plug a USB mouse into the SAME adapter — if it works, OTG is fine and the issue is the cable;','mut');
+      log('  (2) open chrome://device-log and re-plug — silence means Android sees nothing electrically;','mut');
+      log('  (3) enable the phone’s USB-OTG setting (Samsung: Settings → search “OTG”);','mut');
+      log('  (4) use a real host/OTG adapter (not charge-only), ideally a powered one — the LOGO cable draws power.','mut');
+      log('  Reliable alternative: plug into a Mac/Windows/Linux computer and use desktop Chrome (Web Serial).','mut');
+    }
+    applyState();
+  }
 };
 $('#ident').onclick=guard(async()=>{ await pgConnect(); });
 $('#restart').onclick=guard(async()=>{ await pgRestart(); await pgConnect(); });
