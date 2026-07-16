@@ -73,17 +73,68 @@ Response: 06  <data … count bytes …>  <xor>
 
 The LOGO! sends `0x06` immediately on receiving the `0x05` byte, then streams the data, then one XOR checksum byte. This tool verifies the XOR.
 
-Source: brickpool/logo PG-Protocol wiki (Read Block Command 05); `ReadBlock()` in `src/LogoPG.cpp` (4-byte address path, XOR loop).
+> ⚠️ **`0x06` here does not mean success.** The spec is explicit: *"The LOGO! sends an response (normally Ack `06`) immediately after receiving the command code `05`"* — i.e. before the address has even been parsed, so that a large read cannot time out the DTE. A rejection therefore arrives **after** the `0x06`, as a 2-byte `15 <code>` exception where the data block was expected. Code that treats `0x06` as "read succeeded" will happily hand an error response to its decoder. Observed on real hardware (0BA6.ES10): `→ 05 00 ff 0e e8 07 d0` … `← 06` then `15 03`.
 
-### 3.3 STOP (needed before reading memory)
+Source: brickpool/logo PG-Protocol wiki (Read Block Command 05, incl. the note on the immediate ACK); `ReadBlock()` in `src/LogoPG.cpp` (4-byte address path, XOR loop).
+
+> Note: `ReadBlock` is invoked exactly **once** in the reference library — `ReadBlock(ADDR_PWD_R_MEM, 10, …)`, i.e. 10 bytes at `0x00FF0566`. Every other documented access uses single-byte `ReadByte`. Block reads of the program area are not exercised by any known working implementation.
+
+### 3.2a Exception response — and the Restart trap (`0x22`)
 
 ```
-PC → 55 12 12 AA
+Response: 15  <code>          ← two bytes, that's the whole message
 ```
 
-Memory reads require STOP mode. Put the device in STOP from its buttons (ESC → Stop) or send this telegram.
+| Code | Meaning |
+|---|---|
+| `01` | Device busy |
+| `02` | Device timeout — resource unavailable |
+| `03` | **Illegal access** — read across the border (bad address or length) |
+| `04` | Parity / overflow / telegram error |
+| `05` | Unknown command — mode not supported |
+| `06` | XOR check incorrect |
+| `07` | Simulation error |
 
-Source: brickpool/logo `src/LogoPG.cpp` — `LOGO_STOP`.
+> 🔴 **On 0BA6 a single exception latches the session.** Per the spec: *"the execution of further commands is no longer possible after an error … Additional commands are always answered with an exception code … To restart the communication (after an exception response), the Restart command `22` is used."*
+>
+> The wedged state **survives closing and reopening the serial port** — only `0x22` or a power cycle clears it. So one bad address makes every subsequent read fail with `15 03` *regardless of whether that later address was valid*, and a stale `15 03` can still be sitting in the buffer on the next connect. Any diagnosis made without first sending `0x22` is unreliable.
+
+```
+PC → 22        LOGO! → 06
+```
+
+This tool sends `0x22` on connect and automatically after every exception.
+
+Source: brickpool/logo PG-Protocol wiki ch.4 "Restart `22`" and ch.5 exception codes; `CpuError()` / `cpuCode*` in `src/LogoPG.cpp`.
+
+### 3.2b Read Byte — command `0x02`
+
+```
+Query:    02  <address>                      (4 bytes on 0BA6)
+Response: 06  03  <address echoed, 4 bytes>  <data byte>
+```
+
+Self-validating, because the LOGO! echoes the address back. Preferred for probing.
+
+Source: PG-Protocol wiki ch.2 "Read Byte Command 02"; `ReadByte()` in `src/LogoPG.cpp`.
+
+### 3.3 STOP and operating mode (needed before reading memory)
+
+```
+STOP:   PC → 55 12 12 AA     LOGO! → 06
+START:  PC → 55 18 18 AA     LOGO! → 06
+MODE:   PC → 55 17 17 AA     LOGO! → 06 <mode>
+```
+
+| Mode byte | Meaning |
+|---|---|
+| `01` | RUN |
+| `20` | RUN_P (parameter mode) |
+| `42` | STOP |
+
+Memory reads (and firmware/clock reads) require STOP. Rather than assuming, query the mode with `55 17 17 AA` and check for `06 42`.
+
+Source: brickpool/logo `src/LogoPG.cpp` — `LOGO_STOP` / `LOGO_START` / `LOGO_MODE`, `GetPlcStatus()`, `RecvControlResponse()`; PG-Protocol wiki "Memory Access".
 
 ---
 
@@ -102,6 +153,10 @@ On 0BA6 the 16-bit 0BA5 addresses live under a `0x00FF____` page. Verified for t
 | Password exists | `48FF` | `0x00FF48FF` | 1 | `0x40` = yes |
 
 > ⚠️ The `0x00FF` prefix for the **program** regions is an inference from the confirmed system-register mapping, not independently documented for 0BA6. The tool's "read program name" self-test exists to confirm it: readable ASCII at `0x00FF0570` ⇒ mapping correct.
+
+> ⚠️ **Appendix A of the PG-Protocol reference documents the address scheme for 0BA5 only — there is no published 0BA6 address table.** The rows above are the 0BA5 map lifted onto the `0x00FF____` page. That extrapolation is confirmed for the system registers (`1F02`, `48FF`, `0566`) because the library reads them on real 0BA6 hardware, but the program regions (`0570`, `0C14`, `0E20`, `0EE8`) are **unverified on 0BA6**. The 0BA6 also has a larger program capacity (200 blocks vs 130), so its program area plausibly differs in both base and length.
+>
+> **Status on real hardware (0BA6.ES10, IdentNo `0x45`, confirmed STOP mode):** block reads at `0x00FF0570 ×16` and `0x00FF0EE8 ×2000` both return `15 03` (illegal access). Whether that reflects a genuinely wrong address or merely a session already latched into the error state (§3.2a) is **not yet resolved** — the observation predates this tool sending `0x22`. Retest after a Restart before concluding the map is wrong.
 
 Source: 0BA5 addresses from brickpool/logo 0BA5-Dekodierung wiki (Appendix A / Adressübersicht) and PG-Protocol wiki (Appendix A). 0BA6 `0x00FF____` prefix from the `ADDR_*` constants in `src/LogoPG.cpp`.
 

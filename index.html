@@ -53,6 +53,8 @@
   <div class="row">
     <button id="ident" class="sec" disabled>1 · Identify (0x21)</button>
     <button id="nametest" class="sec" disabled>2 · Read program name (self-test)</button>
+    <button id="restart" class="sec" disabled>Restart (0x22)</button>
+    <button id="fw" class="sec" disabled>Read firmware (proves reads work)</button>
     <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
     <button id="stop" class="sec" disabled>Send STOP</button>
   </div>
@@ -208,6 +210,18 @@ const CPU_ERR={
   0x06:'XOR check incorrect',
   0x07:'Simulation error — not supported in this mode',
 };
+// Restart command 0x22. CRITICAL for 0BA6: after ANY exception the device refuses
+// every further command with an exception code until it is restarted. Source:
+// brickpool/logo wiki PG-Protocol.md ch.4 "Restart 22".
+async function pgRestart(){
+  await xport.read(4096,60);
+  await xport.write(new Uint8Array([0x22]));
+  const r=await xport.read(1,1200);
+  const ok = r.length && r[0]===0x06;
+  log('→ 22   ← '+(r.length?hex(r):'(nothing)')+'   (Restart — clears the error state)', ok?'ok':'err');
+  await drain('restart',150);
+  return ok;
+}
 // Read everything still sitting in the buffer and show it. Nothing gets swallowed.
 async function drain(tag,to=400){
   const j=await xport.read(4096,to);
@@ -230,6 +244,7 @@ async function readBlock(addr, count){
     const code=e.length?e[0]:-1;
     log('← '+hex(e)+'   (error code)','err');
     await drain('after NOK');
+    await pgRestart(); // else every later command also returns an exception
     throw new Error('LOGO! REJECTED the read at '+A+' — NOK 0x15, code 0x'+
       (code<0?'??':code.toString(16).padStart(2,'0'))+': '+(CPU_ERR[code]||'unrecognised code'));
   }
@@ -242,9 +257,14 @@ async function readBlock(addr, count){
   if(data.length<count){
     log('  SHORT READ: asked '+count+', got '+data.length+' → '+hex(data.slice(0,32))+(data.length>32?' …':''),'err');
     await drain('after short read');
+    // The 0x06 arrives as soon as the LOGO! sees the command byte 0x05 -- before it has
+    // even parsed the address -- so a rejection legitimately shows up AFTER the "ACK".
+    const nok = data.length===2 && data[0]===0x15;
+    await pgRestart();
     throw new Error('Read Block '+A+': short read ('+data.length+'/'+count+' bytes). '+
-      (data.length===2&&data[0]===0x15?'Those 2 bytes are a NOK exception (0x15 '+
-        (CPU_ERR[data[1]]||'0x'+data[1].toString(16))+') that arrived after an ACK.':'LOGO! stopped sending mid-block.'));
+      (nok?'Those 2 bytes are the real answer: NOK exception 0x15, code 0x'+data[1].toString(16).padStart(2,'0')+
+        ' — '+(CPU_ERR[data[1]]||'unrecognised code')+'. (The 0x06 is only "command byte received", not success.)'
+        :'LOGO! stopped sending mid-block.'));
   }
   const cs=await xport.read(1,1500);
   let x=0; for(const d of data) x^=d;
@@ -255,6 +275,41 @@ async function readBlock(addr, count){
      ' vs computed 0x'+x.toString(16).padStart(2,'0')+')'), okcs?'ok':'err');
   if(!okcs) await drain('after checksum mismatch');
   return data;
+}
+// Read Byte 0x02. Response echoes the address back: 06 03 <4-byte addr> <data>.
+// That echo makes it self-validating, unlike Read Block. Source: PG-Protocol.md ch.2.
+async function readByte(addr, quiet){
+  const cmd=new Uint8Array([0x02,(addr>>>24)&0xff,(addr>>>16)&0xff,(addr>>>8)&0xff,addr&0xff]);
+  const A='0x'+addr.toString(16).padStart(8,'0');
+  await xport.write(cmd);
+  const t0=await xport.read(1,1500);
+  if(!t0.length){ await drain('(silent)'); throw new Error('Read Byte '+A+': no response.'); }
+  if(t0[0]===0x15){
+    const e=await xport.read(1,1000); const code=e.length?e[0]:-1;
+    log('→ '+hex(cmd)+'   ← 15 '+hex(e)+'   NOK','err');
+    await drain('after NOK'); await pgRestart();
+    throw new Error('Read Byte '+A+' rejected — NOK code 0x'+(code<0?'??':code.toString(16).padStart(2,'0'))+
+      ': '+(CPU_ERR[code]||'unrecognised code'));
+  }
+  if(t0[0]!==0x06){ await drain('after unexpected'); throw new Error('Read Byte '+A+': expected 0x06/0x15, got 0x'+t0[0].toString(16)); }
+  const rest=await xport.read(6,1500); // 03 + 4 addr echo + 1 data
+  if(rest.length<6){ await drain('short'); throw new Error('Read Byte '+A+': short response ('+hex(rest)+')'); }
+  if(!quiet) log('→ '+hex(cmd)+'   ← 06 '+hex(rest),'mut');
+  if(rest[0]!==0x03) throw new Error('Read Byte '+A+': expected data code 0x03, got 0x'+rest[0].toString(16));
+  const echo=(rest[1]<<24>>>0)+(rest[2]<<16)+(rest[3]<<8)+rest[4];
+  if(echo!==addr) log('  address echo MISMATCH: sent '+A+', echoed 0x'+echo.toString(16).padStart(8,'0'),'err');
+  return rest[5];
+}
+// Firmware read: proves single-byte reads work at all, independent of my guessed
+// program addresses. Source: PG-Protocol.md "Read Firmware" (STOP mode only).
+async function readFirmware(){
+  const ident=await readByte(0x00FF1F02);
+  log('Ident byte @1F02 = 0x'+ident.toString(16),'ok');
+  let s='';
+  for(let a=0x00FF1F03;a<=0x00FF1F09;a++){ const b=await readByte(a,true); s+=(b>=32&&b<127)?String.fromCharCode(b):'·'; }
+  log('Firmware string @1F03..1F09 = "'+s+'"  (expect e.g. V01.03.2)', /^V/.test(s)?'ok':'err');
+  log(/^V/.test(s)?'→ Single-byte reads WORK. The memory bus is fine; any Read Block failure is an address/length problem.'
+                 :'→ Firmware string looks wrong; reads are not returning sane data.', /^V/.test(s)?'ok':'err');
 }
 // Operating mode. 55 17 17 AA -> 06 <mode>. Source: LogoPG.cpp GetPlcStatus/RecvControlResponse.
 const MODES={0x01:'RUN',0x20:'RUN_P (parameter mode)',0x42:'STOP'};
@@ -287,11 +342,17 @@ $('#connect').onclick=async()=>{
     else if('usb' in navigator){ log('Web Serial unavailable → using WebUSB (Android).','mut'); xport=await connectWebUSB(); }
     else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
     $('#status').textContent='connected ('+xport.kind+')'; $('#status').className='ok';
-    for(const id of ['#ident','#nametest','#mode','#stop','#dump','#decode']) $(id).disabled=false;
+    for(const id of ['#ident','#nametest','#restart','#fw','#mode','#stop','#dump','#decode']) $(id).disabled=false;
     log('Cable connected via '+xport.kind+'. Configured 9600 8E1.','ok');
+    // A 0BA6 stays wedged in its error state across reconnects (only 0x22 or a power
+    // cycle clears it), so a previous failed session would poison this one too.
+    log('Clearing any leftover error state from a previous session…','mut');
+    await pgRestart();
   }catch(e){ log('Connect failed: '+e.message,'err'); }
 };
 $('#ident').onclick=()=>pgConnect().catch(e=>log(e.message,'err'));
+$('#restart').onclick=async()=>{ try{ await pgRestart(); await pgConnect(); }catch(e){ log(e.message,'err'); } };
+$('#fw').onclick=async()=>{ try{ await pgConnect(); const m=await getMode(); if(m!==0x42) log('Firmware reads need STOP mode — press “Send STOP” first.','err'); await readFirmware(); }catch(e){ log(e.message,'err'); } };
 $('#mode').onclick=async()=>{ try{ await pgConnect(); await getMode(); }catch(e){ log(e.message,'err'); } };
 $('#stop').onclick=async()=>{ try{ await pgConnect(); await sendStop(); await getMode(); }catch(e){ log(e.message,'err'); } };
 $('#nametest').onclick=async()=>{ try{ await pgConnect(); const d=await readBlock(0x00FF0570,16); log('Program name: "'+[...d].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('')+'"', 'ok'); }catch(e){ log(e.message,'err'); } };
