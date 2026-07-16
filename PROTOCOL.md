@@ -136,6 +136,35 @@ Memory reads (and firmware/clock reads) require STOP. Rather than assuming, quer
 
 Source: brickpool/logo `src/LogoPG.cpp` — `LOGO_STOP` / `LOGO_START` / `LOGO_MODE`, `GetPlcStatus()`, `RecvControlResponse()`; PG-Protocol wiki "Memory Access".
 
+### 3.4 Password protection and cleartext recovery
+
+If the circuit program is password-protected, the program area cannot be read: on a 0BA6.ES10 `Read Block` returns `15 03` (illegal access) and `Read Byte` returns `0x00` for every protected byte (it does **not** fault). Check first:
+
+```
+Read Byte 0x00FF48FF  →  0x40 = password set,  0x00 = none
+Read Byte 0x00FF1F00  →  0x04   (magic, sanity)
+Read Byte 0x00FF1F01  →  0x00   (magic, sanity)
+```
+
+**The 0BA6 stores the password in cleartext and it is recoverable from the device.** The documented login (`SetSessionPassword()` in `LogoPG.cpp`) lowers protection and then reads the stored password back to compare it:
+
+```
+Write Byte 0x00FF4740 = 0x00     ← protection level 1 (no protection). THE ONLY WRITE.
+Read  0x00FF0566 .. 0x00FF056F   ← 10-byte cleartext password (now readable)
+                                   (use Read Byte on 0BA6.ES10; Read Block is rejected)
+```
+
+Protection levels (write targets): `0x00FF4740` = level 1 (none), `0x00FF4800` = level 2 (read), `0x00FF4100` = level 3 (read/write).
+
+**Safety of this write** (audited against `SetSessionPassword()`):
+- It is byte-identical to what LOGO!Soft's login does. It changes a protection-level register, not program memory.
+- It is **non-destructive**: the program and the stored password are untouched (the reference reads both *after* this write). The only command that erases the program/password is Clear Program `0x20`, which is never sent.
+- It is **reversible**: writing `0x00` to `0x00FF4100` restores level 3 with the existing password. (Level is not independently reported by `0x48FF`, which only says whether a password exists, so a device originally at level 2 comes back at level 3 — marginally more locked, still non-destructive.)
+
+> This is password *recovery from your own hardware*, exploiting the 0BA6's cleartext storage — legitimate for a device you own, not a way around someone else's protection.
+
+Source: brickpool/logo `src/LogoPG.cpp` — `SetSessionPassword()`, `ClearSessionPassword()`, `WriteByte()`, `ADDR_PL_*` / `ADDR_PWD_*`; PG-Protocol wiki "Write Byte 01", protection/password sections. Verified against real hardware (0BA6.ES10): `0x00FF48FF = 0x40`.
+
 ---
 
 ## 4. Address map (0BA6)

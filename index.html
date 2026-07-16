@@ -57,6 +57,8 @@
     <button id="probe" class="sec" disabled>Probe address space</button>
     <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
     <button id="findmem" class="sec" disabled>Find real memory map (Read Block probe)</button>
+    <button id="unlock" class="sec" disabled>⚠ Recover password &amp; unlock (writes to PLC)</button>
+    <button id="relock" class="sec" disabled>Re-lock (restore protection)</button>
     <button id="abort" class="sec" disabled>Stop probe</button>
     <button id="fw" class="sec" disabled>Read firmware (proves reads work)</button>
     <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
@@ -314,6 +316,90 @@ async function readByte(addr, quiet){
   if(echo!==addr) log('  address echo MISMATCH: sent '+A+', echoed 0x'+echo.toString(16).padStart(8,'0'),'err');
   return rest[5];
 }
+// Write Byte 0x01. THE ONLY WRITE THIS TOOL PERFORMS. Response is a bare 0x06 (or 15
+// <code>). Source: PG-Protocol.md ch.2 "Write Byte 01"; WriteByte() in LogoPG.cpp.
+async function writeByte(addr, data){
+  const cmd=new Uint8Array([0x01,(addr>>>24)&0xff,(addr>>>16)&0xff,(addr>>>8)&0xff,addr&0xff,data&0xff]);
+  const A='0x'+addr.toString(16).padStart(8,'0');
+  await xport.read(4096,40);
+  await xport.write(cmd);
+  const t0=await xport.read(1,1500);
+  log('→ '+hex(cmd)+'   ← '+(t0.length?hex(t0):'(nothing)')+'   (Write Byte '+A+' = 0x'+data.toString(16).padStart(2,'0')+')',
+      (t0.length&&t0[0]===0x06)?'ok':'err');
+  if(t0.length&&t0[0]===0x15){ const e=await xport.read(1,900); await pgRestart();
+    throw new Error('Write Byte '+A+' rejected — NOK '+(e.length?(CPU_ERR[e[0]]||hex(e)):'?')); }
+  if(!t0.length||t0[0]!==0x06) throw new Error('Write Byte '+A+': no ACK (got '+hex(t0)+')');
+}
+// Clean Read Block for a known-legal range (used post-unlock for the 10-byte password
+// area). Returns data or throws; does NOT feed the decoder like the old readBlock path.
+async function readBlockRaw(addr, count){
+  const cmd=new Uint8Array([0x05,(addr>>>24)&0xff,(addr>>>16)&0xff,(addr>>>8)&0xff,addr&0xff,(count>>8)&0xff,count&0xff]);
+  await xport.read(4096,40);
+  await xport.write(cmd);
+  const t0=await xport.read(1,1500);
+  if(t0.length&&t0[0]===0x15){ const e=await xport.read(1,900); await recover();
+    throw new Error('Read Block 0x'+addr.toString(16)+' rejected — NOK '+(e.length?(CPU_ERR[e[0]]||hex(e)):'?')); }
+  if(!t0.length||t0[0]!==0x06) throw new Error('Read Block 0x'+addr.toString(16)+': no ACK ('+hex(t0)+')');
+  const data=await xport.read(count,4000);
+  if(data.length<count){ await recover(); throw new Error('Read Block 0x'+addr.toString(16)+': short ('+data.length+'/'+count+')'); }
+  await xport.read(1,800); // checksum
+  return data;
+}
+// Recover the read password from the device and lower protection so the program can be
+// dumped. This is the documented login (LogoPG.cpp SetSessionPassword): the 0BA6 stores
+// the password in cleartext at 0x00FF0566 and it becomes readable once protection level
+// 1 is written. THIS WRITES TO THE PLC (protection register 0x00FF4740).
+async function recoverPasswordAndUnlock(){
+  abortProbe=false; // clear any stale Stop from an earlier probe, else readRegion aborts
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Needs STOP mode — press “Send STOP” first.','err'); return; }
+  const exists=await readByte(0x00FF48FF);
+  if(exists!==0x40){ log('Password byte @48FF = 0x'+exists.toString(16)+' — no protection to recover. Just dump.','ok'); return; }
+  // Confirm the magic bytes BEFORE writing anything, as the reference does — this proves
+  // we're really looking at a password state and not misreading the device.
+  const g1=await readByte(0x00FF1F00), g2=await readByte(0x00FF1F01);
+  if(g1!==0x04||g2!==0x00){ log('Magic bytes unexpected (0x'+g1.toString(16)+'/0x'+g2.toString(16)+'); aborting BEFORE any write.','err'); return; }
+  log('Password is set (magic bytes OK). Beginning documented unlock — THIS WRITES to the PLC protection register 0x00FF4740.','mut');
+  // The single write: lower protection to level 1 (no protection). Byte-identical to
+  // SetSessionPassword() in the reference. Reversible with Re-lock (writes level 3 back).
+  await writeByte(0x00FF4740, 0x00);
+  // From here the PLC is unprotected. Record that immediately and guarantee the warning
+  // prints no matter what fails below, so the device is never silently left unlocked.
+  unlocked=true;
+  try{
+    // Read the 10-byte cleartext password with the BYTE-WISE path (Read Byte), which is
+    // proven on this hardware. Read Block is rejected on this 0BA6.ES10 even for legal
+    // ranges, so using it here would throw and strand the flow.
+    const pw=await readRegion(0x00FF0566, 10, 'password area');
+    const ascii=[...pw].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('');
+    log('STORED PASSWORD (cleartext, 10 bytes): "'+ascii.replace(/·+$/,'')+'"','ok');
+    log('  raw: '+hex(pw),'mut');
+    // Verify read access is now open using the SAME command the dump uses (Read Byte),
+    // so a real success can't be reported as a failure.
+    log('Verifying read access to the program area…','mut');
+    const test=await readRegion(0x00FF0EE8, 16, 'program probe');
+    let nz=0; for(const d of test) if(d) nz++;
+    if(nz>0) log('Read access OPEN — 0x00FF0EE8 returns real data now ('+nz+'/16 non-zero: '+hex(test)+'). Run “Read all + decode”.','ok');
+    else log('Still all zero at 0x00FF0EE8 after unlock — the program may live elsewhere; run “Find real memory map”.','err');
+    // Bonus datapoint: does unlocking also make Read Block work? Purely informational.
+    try{ await readBlockRaw(0x00FF0EE8, 16); log('(Read Block also works now.)','mut'); }catch(_){ log('(Read Block still rejected even unprotected — a genuine device quirk, but Read Byte covers us.)','mut'); }
+  } finally {
+    log('⚠️ The PLC is now at protection level 1 (UNPROTECTED). Dump now, then press “Re-lock” to restore protection.','err');
+  }
+}
+// Restore read/write protection (level 3). The password stored at 0566 is untouched, so
+// the original password protection is reinstated. Source: ADDR_PL_W_LEVEL3 in LogoPG.cpp.
+let unlocked=false;
+async function relock(){
+  await pgRestart(); await pgConnect();
+  const m=await getMode(); if(m!==0x42){ log('Needs STOP mode.','err'); return; }
+  await writeByte(0x00FF4100, 0x00); // ADDR_PL_W_LEVEL3 (read/write protection)
+  const chk=await readByte(0x00FF48FF);
+  log('Re-locked. Password byte @48FF = 0x'+chk.toString(16)+(chk===0x40?' (password protection restored).':' (unexpected).'),chk===0x40?'ok':'err');
+  log('Note: this restores level 3 (read+write protection) with your existing password. If your device was originally level 2 (read-only protection), it is now slightly more locked; reset the exact level in LOGO!Soft if it matters.','mut');
+  unlocked=false;
+}
 // Firmware read: proves single-byte reads work at all, independent of Read Block.
 // Field layout follows the ADDR_OC_* constants in LogoPG.cpp: 1F03='V', 1F04=major,
 // 1F05..06=minor, 1F07..08=patch. (The wiki's prose says major is 2 chars and runs to
@@ -529,6 +615,8 @@ $('#ident').onclick=guard(async()=>{ await pgConnect(); });
 $('#restart').onclick=guard(async()=>{ await pgRestart(); await pgConnect(); });
 $('#abort').onclick=()=>{ abortProbe=true; log('Stopping…','mut'); };
 $('#blockdiag').onclick=guard(blockDiag);
+$('#unlock').onclick=guard(recoverPasswordAndUnlock);
+$('#relock').onclick=guard(relock);
 $('#findmem').onclick=guard(async()=>{
   await pgRestart(); await pgConnect();
   const m=await getMode();
