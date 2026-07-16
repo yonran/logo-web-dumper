@@ -23,7 +23,10 @@
   *{box-sizing:border-box}
   body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:900px;margin:0 auto}
   h1{font-size:19px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 16px}
-  button{font:inherit;padding:9px 14px;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:8px;cursor:pointer}
+  /* touch-action:manipulation disables double-tap-to-zoom on buttons, so a quick
+     double-tap delivers TWO click events instead of being swallowed as a zoom gesture
+     (which silently ate the second tap of the two-click write-confirm on mobile). */
+  button{font:inherit;padding:9px 14px;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:8px;cursor:pointer;touch-action:manipulation}
   button.sec{background:transparent;color:var(--acc)}
   button:disabled{opacity:.45;cursor:not-allowed}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
