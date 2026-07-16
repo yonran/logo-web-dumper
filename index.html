@@ -55,6 +55,7 @@
     <button id="nametest" class="sec" disabled>2 · Read program name (self-test)</button>
     <button id="restart" class="sec" disabled>Restart (0x22)</button>
     <button id="probe" class="sec" disabled>Probe address space</button>
+    <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
     <button id="abort" class="sec" disabled>Stop probe</button>
     <button id="fw" class="sec" disabled>Read firmware (proves reads work)</button>
     <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
@@ -323,6 +324,65 @@ async function readFirmware(){
   log(/^V/.test(s)?'→ Single-byte reads WORK. The memory bus is fine; any Read Block failure is an address/length problem.'
                  :'→ Firmware string looks wrong; reads are not returning sane data.', /^V/.test(s)?'ok':'err');
 }
+// Low-level Read Block attempt that reports rather than throws. Used to characterise
+// WHY block reads fail on 0BA6 hardware, where Read Byte works at every address.
+async function tryBlock(cmd, count, label){
+  await xport.read(4096,60);
+  await xport.write(cmd);
+  const t0=await xport.read(1,2000);
+  if(!t0.length){ log(label+' → no response','err'); await recover(); return null; }
+  if(t0[0]===0x15){ const e=await xport.read(1,900);
+    log(label+' → NOK 15 '+hex(e)+'  '+(e.length?(CPU_ERR[e[0]]||'?'):''),'err'); await recover(); return null; }
+  if(t0[0]!==0x06){ log(label+' → unexpected '+hex(t0),'err'); await recover(); return null; }
+  const data=await xport.read(count,8000);
+  if(data.length<count){
+    if(data.length===2&&data[0]===0x15)
+      log(label+' → 06 then NOK 15 '+data[1].toString(16).padStart(2,'0')+'  '+(CPU_ERR[data[1]]||'?'),'err');
+    else log(label+' → short '+data.length+'/'+count+': '+hex(data.slice(0,24)),'err');
+    await recover(); return null;
+  }
+  const cs=await xport.read(1,1500);
+  let x=0; for(const d of data) x^=d;
+  const ok=cs.length&&cs[0]===x;
+  log(label+' → OK, '+data.length+' bytes, XOR '+(ok?'ok':'MISMATCH'),ok?'ok':'err');
+  await xport.read(4096,60);
+  return data;
+}
+// Characterise Read Block: is it the address, the count, or the address width?
+async function blockDiag(){
+  await pgRestart(); await pgConnect();
+  const m=await getMode(); if(m!==0x42){ log('Needs STOP mode.','err'); return; }
+  log('— Test 1: the ONE Read Block proven in the reference library (10 bytes @ 0x00FF0566) —','mut');
+  const t1=await tryBlock(new Uint8Array([0x05,0x00,0xff,0x05,0x66,0x00,0x0a]),10,'  05 00 ff 05 66 00 0a');
+  log('— Test 2: 0BA5-style 2-byte address (the wiki\'s own Read Block examples use this form) —','mut');
+  const t2=await tryBlock(new Uint8Array([0x05,0x05,0x66,0x00,0x0a]),10,'  05 05 66 00 0a');
+  log('— Test 3: count ladder at 0x00FF0000 (probe says every page is Read Byte-readable) —','mut');
+  let maxOk=0;
+  for(const n of [1,2,4,8,10,16,32,64,80,128,256]){
+    const r=await tryBlock(new Uint8Array([0x05,0x00,0xff,0x00,0x00,(n>>8)&0xff,n&0xff]),n,'  count '+n);
+    if(r) maxOk=n; else break;
+  }
+  log('— Verdict —','mut');
+  if(t1) log('Read Block works for the proven case. Largest count that succeeded: '+maxOk+'. The failures are a count/range limit, not the address.','ok');
+  else if(t2) log('Read Block needs a 2-BYTE address on this device, despite the 4-byte Read Byte. The 0BA6 param table\'s query column is unreliable (its Read Byte row is provably wrong too).','ok');
+  else log('Read Block fails even for the one case the reference library performs on real hardware. Read Byte works at every address, so dumping byte-by-byte is the reliable path.','err');
+}
+// Byte-wise region read. Read Byte is confirmed working at every probed address on
+// this 0BA6.ES10, so this is the dependable dump path even though Read Block is not.
+async function readRegion(addr,count,label){
+  const out=new Uint8Array(count);
+  const t0=Date.now();
+  for(let i=0;i<count;i++){
+    if(abortProbe){ log('  aborted at '+i+'/'+count,'err'); throw new Error('aborted'); }
+    out[i]=await readByte((addr+i)>>>0,true);
+    if(i%128===127||i===count-1){
+      const pct=Math.round((i+1)/count*100), el=(Date.now()-t0)/1000;
+      log('  '+label+': '+(i+1)+'/'+count+' bytes ('+pct+'%), '+el.toFixed(0)+'s elapsed','mut');
+    }
+  }
+  log('  '+label+': read '+count+' bytes via Read Byte.','ok');
+  return out;
+}
 // Address prober. The published address map is for 0BA5 only and lifting it onto the
 // 0BA6's 0x00FF page fails on real hardware, so map the space empirically instead:
 // one Read Byte per page, recovering from the exception each miss.
@@ -395,7 +455,8 @@ $('#connect').onclick=async()=>{
 };
 $('#ident').onclick=()=>pgConnect().catch(e=>log(e.message,'err'));
 $('#restart').onclick=async()=>{ try{ await pgRestart(); await pgConnect(); }catch(e){ log(e.message,'err'); } };
-$('#abort').onclick=()=>{ abortProbe=true; log('Stopping probe…','mut'); };
+$('#abort').onclick=()=>{ abortProbe=true; log('Stopping…','mut'); };
+$('#blockdiag').onclick=()=>blockDiag().catch(e=>log(e.message,'err'));
 $('#probe').onclick=async()=>{
   try{
     await pgRestart(); await pgConnect();
@@ -494,11 +555,18 @@ function decodeCombined(bytes){
 }
 
 async function readAllAndDecode(){
-  await pgConnect();
-  log('Reading pointer table, wiring, and program…','mut');
-  const ptr=await readBlock(0x00FF0C14,260);
-  const term=await readBlock(0x00FF0E20,200);
-  const prog=await readBlock(0x00FF0EE8,2000);
+  abortProbe=false;
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Reads need STOP mode — press “Send STOP” first.','err'); return; }
+  // Read Block is rejected (15 03) on this 0BA6.ES10 even at addresses the prober
+  // shows are readable, so read byte-by-byte with Read Byte, which is confirmed
+  // working everywhere. ~2460 bytes at 9600 baud ≈ half a minute.
+  log('Reading pointer table, wiring, and program via Read Byte (~2460 bytes, ~30-60s)…','mut');
+  log('Press “Stop probe” to abort.','mut');
+  const ptr=await readRegion(0x00FF0C14,260,'pointer table');
+  const term=await readRegion(0x00FF0E20,200,'output wiring');
+  const prog=await readRegion(0x00FF0EE8,2000,'program');
   const full=new Uint8Array(2460); full.set(ptr,0); full.set(term,260); full.set(prog,460);
   // offer combined download for offline re-decode
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([full])); a.download='logo_0ba6_full.bin'; a.click();
