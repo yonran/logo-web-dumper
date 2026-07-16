@@ -197,7 +197,7 @@ async function connectWebUSB(){
   const cIn=(req,val,idx,len)=>dev.controlTransferIn({requestType:'vendor',recipient:'device',request:req,value:val,index:idx}, len);
   // --- configure 9600 8E1 per chip ---
   if(vid===0x10c4){ // CP210x
-    log('chip: CP210x','mut');
+    log('chip: CP210x — WebUSB driver NOT verified on hardware; if bytes are garbled, use desktop Web Serial instead.','err');
     await cOut(0x00,0x0001); // IFC_ENABLE
     await cOut(0x1E,0x0000,0x0000,new Uint8Array([0x80,0x25,0,0])); // SET_BAUDRATE 9600 LE (wIndex holds data on some fw; send both)
     await dev.controlTransferOut({requestType:'vendor',recipient:'device',request:0x1E,value:0,index:0}, new Uint8Array([0x80,0x25,0,0]));
@@ -219,13 +219,15 @@ async function connectWebUSB(){
     // The LOGO PG interface needs these lines high; the OS driver (desktop) sets them too.
     await cOut(0xA4,0xFF9F,0);            // CH341_REQ_MODEM_CTRL
   } else if(vid===0x0403){ // FTDI
-    log('chip: FTDI','mut');
-    await cOut(0x00,0x0000); // reset
-    await cOut(0x03,0x4138); // set baud 9600 (FT232 divisor)
-    await cOut(0x04,0x1008); // data characteristics: 8 data bits, even parity, 1 stop  (0x08=8bits, parity even=2<<8 ->0x0200? see note)
+    log('chip: FTDI — WebUSB driver NOT verified on hardware; if bytes are garbled, use desktop Web Serial instead.','err');
+    await cOut(0x00,0x0000); // SIO_RESET
+    await cOut(0x03,0x4138); // SIO_SET_BAUD_RATE: 9600 (FT232 divisor 0x4138)
+    // SIO_SET_DATA: bits0-7 data(8=0x08), bits8-10 parity(even=2 -> 0x0200), bits11-13 stop(1=0).
+    // 8E1 = 0x0208. (Was 0x1008 = no-parity + 2 stop bits — wrong for the LOGO's 8E1.)
+    await cOut(0x04,0x0208);
   } else {
-    log('chip: UNKNOWN vendor '+id4(vid)+' — no driver for this chip, so baud/parity are NOT configured.','err');
-    log('  Proceeding anyway; it will likely fail or return garbage. Report '+id4(vid)+':'+id4(dev.productId)+' to add support.','err');
+    log('chip: NO DRIVER for vendor '+id4(vid)+' — baud/parity are NOT configured, so bytes will be garbage on WebUSB.','err');
+    log('  Report '+id4(vid)+':'+id4(dev.productId)+' to add support — OR just use desktop Web Serial, which needs no per-chip driver.','err');
   }
   let buf=new Uint8Array(0);
   const ftdi = vid===0x0403;
