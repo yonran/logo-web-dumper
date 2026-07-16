@@ -383,7 +383,9 @@ $('#connect').onclick=async()=>{
     else if('usb' in navigator){ log('Web Serial unavailable → using WebUSB (Android).','mut'); xport=await connectWebUSB(); }
     else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
     $('#status').textContent='connected ('+xport.kind+')'; $('#status').className='ok';
-    for(const id of ['#ident','#nametest','#restart','#fw','#mode','#stop','#dump','#decode']) $(id).disabled=false;
+    // Derive from the DOM rather than a hand-kept list -- a hardcoded list silently
+    // strands any button added later (which is exactly what happened to #probe).
+    document.querySelectorAll('button[disabled]').forEach(b=>{ if(b.id!=='connect') b.disabled=false; });
     log('Cable connected via '+xport.kind+'. Configured 9600 8E1.','ok');
     // A 0BA6 stays wedged in its error state across reconnects (only 0x22 or a power
     // cycle clears it), so a previous failed session would poison this one too.
