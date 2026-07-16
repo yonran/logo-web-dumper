@@ -51,6 +51,13 @@
   <p class="mut" style="font-size:12.5px;margin:0 0 8px">Do these in order. Steps <b>3</b> and <b>5</b> write to the PLC and require a second click to confirm.</p>
   <div class="row">
     <button id="connect">1 &middot; Connect cable</button>
+    <label style="display:inline-flex;align-items:center;gap:4px">Transport
+      <select id="transport" style="font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)">
+        <option value="auto">Auto</option>
+        <option value="serial">Web Serial</option>
+        <option value="usb">WebUSB (Android OTG)</option>
+      </select>
+    </label>
     <button id="stop" disabled>2 &middot; Put in STOP</button>
     <button id="unlock" disabled>3 &middot; Recover password &amp; unlock &#9888;</button>
     <button id="decode" disabled>4 &middot; Read program &amp; decode</button>
@@ -665,11 +672,21 @@ function armWrite(id, run){
   };
 }
 $('#connect').onclick=async()=>{
+  const hasSerial='serial' in navigator, hasUsb='usb' in navigator;
+  const pref=$('#transport') ? $('#transport').value : 'auto';
+  // Android Chrome exposes BOTH navigator.serial and navigator.usb, so an either/or
+  // that prefers serial can lock you out of the USB path. Honour an explicit choice;
+  // in auto, try serial first (it needs no per-chip driver) but the user can force USB.
+  const mode = pref!=='auto' ? pref : (hasSerial ? 'serial' : hasUsb ? 'usb' : null);
   try{
     $('#connect').disabled=true;
-    if('serial' in navigator){ log('Using Web Serial (desktop).','mut'); xport=await connectWebSerial(); }
-    else if('usb' in navigator){ log('Web Serial unavailable → using WebUSB (Android).','mut'); xport=await connectWebUSB(); }
-    else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
+    if(mode==='serial'){
+      if(!hasSerial) throw new Error('This browser has no Web Serial. Switch Transport to WebUSB.');
+      log('Connecting via Web Serial…','mut'); xport=await connectWebSerial();
+    } else if(mode==='usb'){
+      if(!hasUsb) throw new Error('This browser has no WebUSB.');
+      log('Connecting via WebUSB…','mut'); xport=await connectWebUSB();
+    } else throw new Error('Neither Web Serial nor WebUSB is available in this browser.');
     $('#status').textContent='connected ('+xport.kind+')'; $('#status').className='ok';
     log('Cable connected via '+xport.kind+'. Configured 9600 8E1.','ok');
     // A 0BA6 stays wedged in its error state across reconnects (only 0x22 or a power
@@ -679,16 +696,12 @@ $('#connect').onclick=async()=>{
     st.connected=true; applyState();
   }catch(e){
     log('Connect failed: '+e.message,'err');
-    // On Android/WebUSB a NotFoundError from an empty picker means the phone never
-    // enumerated the cable over OTG -- the cable is invisible below the browser.
-    const usbOnly = !('serial' in navigator) && ('usb' in navigator);
-    if(usbOnly && /NotFoundError|No device selected/i.test(e.name+' '+e.message)){
-      log('The picker had NO devices to choose from, so Android is not seeing the cable through the OTG adapter (not a tool problem).','err');
-      log('  Check, in order: (1) plug a USB mouse into the SAME adapter — if it works, OTG is fine and the issue is the cable;','mut');
-      log('  (2) open chrome://device-log and re-plug — silence means Android sees nothing electrically;','mut');
-      log('  (3) enable the phone’s USB-OTG setting (Samsung: Settings → search “OTG”);','mut');
-      log('  (4) use a real host/OTG adapter (not charge-only), ideally a powered one — the LOGO cable draws power.','mut');
-      log('  Reliable alternative: plug into a Mac/Windows/Linux computer and use desktop Chrome (Web Serial).','mut');
+    const emptyPicker = /NotFoundError|No port selected|No device selected/i.test(e.name+' '+e.message);
+    if(emptyPicker){
+      log('The picker had nothing to choose from, so the OS is not seeing the cable on the "'+mode+'" transport.','err');
+      if(mode==='serial' && hasUsb) log('→ Your cable did not appear as a serial port. Set the Transport dropdown to “WebUSB” and press Connect again — that is the path that works with OTG cables on Android.','err');
+      else if(mode==='usb') log('→ Android is not enumerating the cable through the OTG adapter. Try a USB mouse in the SAME adapter (if it works, OTG is fine, the issue is the cable); check chrome://device-log while re-plugging; enable the phone’s USB-OTG setting; use a real/powered host adapter.','err');
+      log('Most reliable path: plug into a Mac/Windows/Linux computer and use desktop Chrome.','mut');
     }
     applyState();
   }
