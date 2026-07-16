@@ -313,16 +313,21 @@ async function readByte(addr, quiet){
   if(echo!==addr) log('  address echo MISMATCH: sent '+A+', echoed 0x'+echo.toString(16).padStart(8,'0'),'err');
   return rest[5];
 }
-// Firmware read: proves single-byte reads work at all, independent of my guessed
-// program addresses. Source: PG-Protocol.md "Read Firmware" (STOP mode only).
+// Firmware read: proves single-byte reads work at all, independent of Read Block.
+// Field layout follows the ADDR_OC_* constants in LogoPG.cpp: 1F03='V', 1F04=major,
+// 1F05..06=minor, 1F07..08=patch. (The wiki's prose says major is 2 chars and runs to
+// 1F09 -- that is wrong; 1F09 reads back as non-printable on real 0BA6.ES10 hardware.)
 async function readFirmware(){
   const ident=await readByte(0x00FF1F02);
   log('Ident byte @1F02 = 0x'+ident.toString(16),'ok');
-  let s='';
-  for(let a=0x00FF1F03;a<=0x00FF1F09;a++){ const b=await readByte(a,true); s+=(b>=32&&b<127)?String.fromCharCode(b):'·'; }
-  log('Firmware string @1F03..1F09 = "'+s+'"  (expect e.g. V01.03.2)', /^V/.test(s)?'ok':'err');
-  log(/^V/.test(s)?'→ Single-byte reads WORK. The memory bus is fine; any Read Block failure is an address/length problem.'
-                 :'→ Firmware string looks wrong; reads are not returning sane data.', /^V/.test(s)?'ok':'err');
+  const ch=[];
+  for(let a=0x00FF1F03;a<=0x00FF1F08;a++) ch.push(await readByte(a,true));
+  const asc=ch.map(b=>(b>=32&&b<127)?String.fromCharCode(b):'·');
+  const ok = asc[0]==='V';
+  const ver = ok ? 'V'+asc[1]+'.'+asc[2]+asc[3]+'.'+asc[4]+asc[5] : asc.join('');
+  log('Firmware @1F03..1F08 = "'+asc.join('')+'"  →  '+ver, ok?'ok':'err');
+  log(ok?'→ Single-byte reads WORK and return sane data. The memory bus and address map are fine.'
+       :'→ Firmware string looks wrong; reads are not returning sane data.', ok?'ok':'err');
 }
 // Low-level Read Block attempt that reports rather than throws. Used to characterise
 // WHY block reads fail on 0BA6 hardware, where Read Byte works at every address.
@@ -437,6 +442,24 @@ async function sendStop(){
 }
 
 // ========== UI ==========
+// One serial port, one conversation. Without this, clicking a second button while a
+// read is in flight lets the two handlers interleave on the port and eat each other's
+// bytes -- which looks exactly like a hardware fault ("SHORT READ: asked 16, got 0").
+let busy=false;
+function guard(fn){
+  return async()=>{
+    if(busy){ log('Busy — wait for the current operation to finish (or press “Stop”).','err'); return; }
+    busy=true;
+    document.querySelectorAll('button').forEach(b=>{ if(b.id!=='abort') b.disabled=true; });
+    try{ await fn(); }
+    catch(e){ log(e.message,'err'); }
+    finally{
+      busy=false;
+      document.querySelectorAll('button').forEach(b=>{ if(b.id!=='connect'||!xport) b.disabled=false; });
+      if(!xport) document.querySelectorAll('button[id]').forEach(b=>{ if(!['connect','decfile'].includes(b.id)) b.disabled=true; });
+    }
+  };
+}
 $('#connect').onclick=async()=>{
   try{
     if('serial' in navigator){ log('Using Web Serial (desktop).','mut'); xport=await connectWebSerial(); }
@@ -453,36 +476,50 @@ $('#connect').onclick=async()=>{
     await pgRestart();
   }catch(e){ log('Connect failed: '+e.message,'err'); }
 };
-$('#ident').onclick=()=>pgConnect().catch(e=>log(e.message,'err'));
-$('#restart').onclick=async()=>{ try{ await pgRestart(); await pgConnect(); }catch(e){ log(e.message,'err'); } };
+$('#ident').onclick=guard(async()=>{ await pgConnect(); });
+$('#restart').onclick=guard(async()=>{ await pgRestart(); await pgConnect(); });
 $('#abort').onclick=()=>{ abortProbe=true; log('Stopping…','mut'); };
-$('#blockdiag').onclick=()=>blockDiag().catch(e=>log(e.message,'err'));
-$('#probe').onclick=async()=>{
-  try{
-    await pgRestart(); await pgConnect();
-    const m=await getMode();
-    if(m!==0x42){ log('Probe needs STOP mode — press “Send STOP” first.','err'); return; }
-    // Sanity-anchor on 1F02, the one address proven to work on real 0BA6 hardware.
-    log('Anchor check: reading the known-good ident byte at 0x00FF1F02…','mut');
-    try{ const id=await readByte(0x00FF1F02); log('Anchor OK — 0x00FF1F02 = 0x'+id.toString(16)+'. Read Byte works, so misses below are real.','ok'); }
-    catch(e){ log('Anchor FAILED: '+e.message,'err'); log('If the one address known to work is unreadable, the problem is not the address map.','err'); return; }
-    await probePages(0x00FF0000, 256, 0x100); // one byte per 256-byte page across the 0x00FF window
-  }catch(e){ log(e.message,'err'); }
-};
-$('#fw').onclick=async()=>{ try{ await pgConnect(); const m=await getMode(); if(m!==0x42) log('Firmware reads need STOP mode — press “Send STOP” first.','err'); await readFirmware(); }catch(e){ log(e.message,'err'); } };
-$('#mode').onclick=async()=>{ try{ await pgConnect(); await getMode(); }catch(e){ log(e.message,'err'); } };
-$('#stop').onclick=async()=>{ try{ await pgConnect(); await sendStop(); await getMode(); }catch(e){ log(e.message,'err'); } };
-$('#nametest').onclick=async()=>{ try{ await pgConnect(); const d=await readBlock(0x00FF0570,16); log('Program name: "'+[...d].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('')+'"', 'ok'); }catch(e){ log(e.message,'err'); } };
-$('#dump').onclick=async()=>{
-  try{
-    await pgConnect();
-    const addr=parseInt($('#addr').value,16), len=parseInt($('#len').value,10);
-    const data=await readBlock(addr,len);
-    const blob=new Blob([data],{type:'application/octet-stream'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='logo_0ba6_'+$('#addr').value+'_'+len+'.bin'; a.click();
-    log('Saved '+data.length+' bytes. Send me this .bin and I can decode the blocks per the 0BA5 map.','ok');
-  }catch(e){ log(e.message,'err'); }
-};
+$('#blockdiag').onclick=guard(blockDiag);
+$('#probe').onclick=guard(async()=>{
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Probe needs STOP mode — press “Send STOP” first.','err'); return; }
+  // Sanity-anchor on 1F02, the one address proven to work on real 0BA6 hardware.
+  log('Anchor check: reading the known-good ident byte at 0x00FF1F02…','mut');
+  try{ const id=await readByte(0x00FF1F02); log('Anchor OK — 0x00FF1F02 = 0x'+id.toString(16)+'. Read Byte works, so misses below are real.','ok'); }
+  catch(e){ log('Anchor FAILED: '+e.message,'err'); log('If the one address known to work is unreadable, the problem is not the address map.','err'); return; }
+  await probePages(0x00FF0000, 256, 0x100); // one byte per 256-byte page across the 0x00FF window
+});
+$('#fw').onclick=guard(async()=>{
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Firmware reads need STOP mode — press “Send STOP” first.','err'); return; }
+  await readFirmware();
+});
+$('#mode').onclick=guard(async()=>{ await pgConnect(); await getMode(); });
+$('#stop').onclick=guard(async()=>{ await pgConnect(); await sendStop(); await getMode(); });
+// Read Byte, not Read Block: Read Block is rejected on this hardware even at addresses
+// the prober shows are readable.
+$('#nametest').onclick=guard(async()=>{
+  abortProbe=false;
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Reads need STOP mode — press “Send STOP” first.','err'); return; }
+  const d=await readRegion(0x00FF0570,16,'program name');
+  log('Program name: "'+[...d].map(c=>c>=32&&c<127?String.fromCharCode(c):'·').join('')+'"', 'ok');
+});
+$('#dump').onclick=guard(async()=>{
+  abortProbe=false;
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Reads need STOP mode — press “Send STOP” first.','err'); return; }
+  const addr=parseInt($('#addr').value,16), len=parseInt($('#len').value,10);
+  if(!(addr>=0) || !(len>0)){ log('Bad address or length.','err'); return; }
+  const data=await readRegion(addr,len,'dump');
+  const blob=new Blob([data],{type:'application/octet-stream'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='logo_0ba6_'+$('#addr').value+'_'+len+'.bin'; a.click();
+  log('Saved '+data.length+' bytes.','ok');
+});
 // ========== Decoder (0BA5/0BA6 block format) ==========
 // Connector word (little-endian) -> signal name. null = unused (FFFF).
 function co(w){
@@ -573,7 +610,7 @@ async function readAllAndDecode(){
   $('#netlist').textContent=decodeCombined(full);
   log('Decoded. Combined dump saved as logo_0ba6_full.bin (re-decodable with the file button).','ok');
 }
-$('#decode').onclick=()=>readAllAndDecode().catch(e=>log(e.message,'err'));
+$('#decode').onclick=guard(readAllAndDecode);
 $('#decfile').onclick=()=>$('#binfile').click();
 $('#binfile').onchange=async(e)=>{
   const f=e.target.files[0]; if(!f) return;
