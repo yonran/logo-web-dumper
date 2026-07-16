@@ -194,6 +194,7 @@ async function connectWebUSB(){
   try{ await dev.claimInterface(iface.interfaceNumber); }catch(e){ throw new Error('claimInterface failed ('+e.message+'). On Android another driver may hold the device.'); }
   const vid=dev.vendorId;
   const cOut=(req,val,idx=0,data)=>dev.controlTransferOut({requestType:'vendor',recipient:'device',request:req,value:val,index:idx}, data);
+  const cIn=(req,val,idx,len)=>dev.controlTransferIn({requestType:'vendor',recipient:'device',request:req,value:val,index:idx}, len);
   // --- configure 9600 8E1 per chip ---
   if(vid===0x10c4){ // CP210x
     log('chip: CP210x','mut');
@@ -201,16 +202,22 @@ async function connectWebUSB(){
     await cOut(0x1E,0x0000,0x0000,new Uint8Array([0x80,0x25,0,0])); // SET_BAUDRATE 9600 LE (wIndex holds data on some fw; send both)
     await dev.controlTransferOut({requestType:'vendor',recipient:'device',request:0x1E,value:0,index:0}, new Uint8Array([0x80,0x25,0,0]));
     await cOut(0x03,0x0820); // SET_LINE_CTL: 8 data, even parity, 1 stop
-  } else if(vid===0x1a86){ // CH340/CH341
+  } else if(vid===0x1a86){ // CH340/CH341 — init mirrors Linux drivers/usb/serial/ch341.c
     log('chip: CH340/CH341','mut');
-    await cOut(0xA1,0,0);
-    // baud 9600 via CH341 factor/divisor algorithm
-    const BASE=1532620800; let factor=Math.floor(BASE/9600), divisor=3;
-    while(factor>0xfff0 && divisor){ factor>>=3; divisor--; }
-    factor=0x10000-factor; const a=(factor&0xff00)|divisor, b=factor&0xff;
-    await cOut(0x9a,0x1312,a); await cOut(0x9a,0x0f2c,b);
-    await cOut(0x9a,0x2518,0x00db); // LCR: RX|TX enable, parity enable, even, 8 bits
-    await cOut(0xA1,0x501f,0xd90a);
+    // Read chip version; the baud-divisor register needs bit 7 set for version > 0x27.
+    let ver=0; try{ const r=await cIn(0x5f,0,0,2); if(r.data&&r.data.byteLength) ver=r.data.getUint8(0); }catch(_){}
+    log('  CH34x version 0x'+ver.toString(16),'mut');
+    await cOut(0xA1,0,0); // CH341_REQ_SERIAL_INIT
+    // Baud 9600 @ 48MHz clock: ps=2, fact=0, div=78 → high=(0x100-78)=0xB2,
+    // low=(fact<<2)|ps = 0x02, plus 0x80 when version>0x27 → wIndex 0xB282 (else 0xB202).
+    // Verified against the driver's 38400 value 0x6483 (ps=3,div=156,+0x80). ~0.16% error.
+    const lo = 0x02 | (ver>0x27 ? 0x80 : 0x00);
+    await cOut(0x9a,0x1312,(0xB2<<8)|lo); // WRITE_REG divisor:prescaler
+    // LCR = ENABLE_RX|ENABLE_TX|ENABLE_PAR|PAR_EVEN|CS8 = 0x80|0x40|0x08|0x10|0x03 = 0xDB
+    await cOut(0x9a,0x2518,0x00db);       // WRITE_REG LCR2:LCR (8 data, even parity, 1 stop)
+    // Assert DTR+RTS. MODEM_CTRL sends ~control; control=RTS(0x40)|DTR(0x20)=0x60 → 0xFF9F.
+    // The LOGO PG interface needs these lines high; the OS driver (desktop) sets them too.
+    await cOut(0xA4,0xFF9F,0);            // CH341_REQ_MODEM_CTRL
   } else if(vid===0x0403){ // FTDI
     log('chip: FTDI','mut');
     await cOut(0x00,0x0000); // reset
