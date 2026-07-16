@@ -99,6 +99,13 @@ const logEl = $('#log');
 function log(m, cls){ const s=document.createElement('span'); if(cls)s.className=cls; s.textContent=m+'\n'; logEl.appendChild(s); logEl.scrollTop=logEl.scrollHeight; }
 function hex(b){ return [...b].map(x=>x.toString(16).padStart(2,'0')).join(' '); }
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const id4 = v => '0x'+v.toString(16).padStart(4,'0');
+function usbName(d){
+  const t = [id4(d.vendorId)+':'+id4(d.productId)];
+  if(d.manufacturerName || d.productName) t.push('“'+[d.manufacturerName,d.productName].filter(Boolean).join(' ')+'”');
+  if(d.serialNumber) t.push('sn='+d.serialNumber);
+  return t.join(' ');
+}
 
 // ---- Transport abstraction: .write(Uint8Array), .read(n, timeoutMs)->Uint8Array, .close()
 let xport = null;
@@ -119,9 +126,14 @@ async function connectWebSerial(){
 }
 
 // ========== WebUSB (Android) — minimal chip drivers ==========
-const FILTERS=[{vendorId:0x0403},{vendorId:0x10c4},{vendorId:0x1a86},{vendorId:0x067b}];
+// Deliberately NO vendor filter: an unknown-VID cable would otherwise be hidden and the
+// picker would just say "No compatible devices found". Show everything, identify after.
 async function connectWebUSB(){
-  const dev = await navigator.usb.requestDevice({filters:FILTERS});
+  const known = await navigator.usb.getDevices();
+  log('previously-authorised devices: ' + (known.length ? known.map(usbName).join(', ') : '(none)'), 'mut');
+  const dev = await navigator.usb.requestDevice({filters:[]});
+  log('picked: ' + usbName(dev), 'ok');
+  log('  class '+dev.deviceClass+'/'+dev.deviceSubclass+'/'+dev.deviceProtocol, 'mut');
   await dev.open();
   if(!dev.configuration) await dev.selectConfiguration(1);
   // find interface + bulk endpoints
@@ -154,7 +166,8 @@ async function connectWebUSB(){
     await cOut(0x03,0x4138); // set baud 9600 (FT232 divisor)
     await cOut(0x04,0x1008); // data characteristics: 8 data bits, even parity, 1 stop  (0x08=8bits, parity even=2<<8 ->0x0200? see note)
   } else {
-    log('chip: unknown vendor 0x'+vid.toString(16)+' — trying with no config (may fail)','err');
+    log('chip: UNKNOWN vendor '+id4(vid)+' — no driver for this chip, so baud/parity are NOT configured.','err');
+    log('  Proceeding anyway; it will likely fail or return garbage. Report '+id4(vid)+':'+id4(dev.productId)+' to add support.','err');
   }
   let buf=new Uint8Array(0);
   const ftdi = vid===0x0403;
