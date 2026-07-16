@@ -54,6 +54,8 @@
     <button id="ident" class="sec" disabled>1 · Identify (0x21)</button>
     <button id="nametest" class="sec" disabled>2 · Read program name (self-test)</button>
     <button id="restart" class="sec" disabled>Restart (0x22)</button>
+    <button id="probe" class="sec" disabled>Probe address space</button>
+    <button id="abort" class="sec" disabled>Stop probe</button>
     <button id="fw" class="sec" disabled>Read firmware (proves reads work)</button>
     <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
     <button id="stop" class="sec" disabled>Send STOP</button>
@@ -213,14 +215,22 @@ const CPU_ERR={
 // Restart command 0x22. CRITICAL for 0BA6: after ANY exception the device refuses
 // every further command with an exception code until it is restarted. Source:
 // brickpool/logo wiki PG-Protocol.md ch.4 "Restart 22".
-async function pgRestart(){
+async function pgRestart(quiet){
   await xport.read(4096,60);
   await xport.write(new Uint8Array([0x22]));
   const r=await xport.read(1,1200);
   const ok = r.length && r[0]===0x06;
-  log('→ 22   ← '+(r.length?hex(r):'(nothing)')+'   (Restart — clears the error state)', ok?'ok':'err');
-  await drain('restart',150);
+  if(!quiet) log('→ 22   ← '+(r.length?hex(r):'(nothing)')+'   (Restart — clears the error state)', ok?'ok':'err');
+  await xport.read(4096,quiet?60:150); // swallow the stray trailing byte
   return ok;
+}
+// After an exception the 0BA6 needs 22 (restart) and then 21 (re-negotiate) before it
+// will answer again. Used by the prober so one bad address doesn't poison the next.
+async function recover(){
+  await pgRestart(true);
+  await xport.write(new Uint8Array([0x21]));
+  await xport.read(4,800);
+  await xport.read(4096,40);
 }
 // Read everything still sitting in the buffer and show it. Nothing gets swallowed.
 async function drain(tag,to=400){
@@ -286,10 +296,12 @@ async function readByte(addr, quiet){
   if(!t0.length){ await drain('(silent)'); throw new Error('Read Byte '+A+': no response.'); }
   if(t0[0]===0x15){
     const e=await xport.read(1,1000); const code=e.length?e[0]:-1;
-    log('→ '+hex(cmd)+'   ← 15 '+hex(e)+'   NOK','err');
-    await drain('after NOK'); await pgRestart();
-    throw new Error('Read Byte '+A+' rejected — NOK code 0x'+(code<0?'??':code.toString(16).padStart(2,'0'))+
+    if(!quiet){ log('→ '+hex(cmd)+'   ← 15 '+hex(e)+'   NOK','err'); await drain('after NOK'); }
+    else { await xport.read(4096,40); }
+    await (quiet?recover():pgRestart());
+    const err=new Error('Read Byte '+A+' rejected — NOK code 0x'+(code<0?'??':code.toString(16).padStart(2,'0'))+
       ': '+(CPU_ERR[code]||'unrecognised code'));
+    err.nok=code; throw err;
   }
   if(t0[0]!==0x06){ await drain('after unexpected'); throw new Error('Read Byte '+A+': expected 0x06/0x15, got 0x'+t0[0].toString(16)); }
   const rest=await xport.read(6,1500); // 03 + 4 addr echo + 1 data
@@ -310,6 +322,35 @@ async function readFirmware(){
   log('Firmware string @1F03..1F09 = "'+s+'"  (expect e.g. V01.03.2)', /^V/.test(s)?'ok':'err');
   log(/^V/.test(s)?'→ Single-byte reads WORK. The memory bus is fine; any Read Block failure is an address/length problem.'
                  :'→ Firmware string looks wrong; reads are not returning sane data.', /^V/.test(s)?'ok':'err');
+}
+// Address prober. The published address map is for 0BA5 only and lifting it onto the
+// 0BA6's 0x00FF page fails on real hardware, so map the space empirically instead:
+// one Read Byte per page, recovering from the exception each miss.
+let abortProbe=false;
+async function probePages(base, pages, stride){
+  abortProbe=false;
+  const hits=[];
+  log('Probing '+pages+' addresses from 0x'+base.toString(16).padStart(8,'0')+
+      ' stride 0x'+stride.toString(16)+' — one Read Byte each. This is slow at 9600 baud.','mut');
+  for(let i=0;i<pages && !abortProbe;i++){
+    const addr=(base+i*stride)>>>0;
+    try{
+      const v=await readByte(addr,true);
+      hits.push({addr,v});
+      log('  READABLE  0x'+addr.toString(16).padStart(8,'0')+' = 0x'+v.toString(16).padStart(2,'0')+
+          (v>=32&&v<127?'  "'+String.fromCharCode(v)+'"':''),'ok');
+    }catch(e){ if(!('nok' in e)){ log('  probe aborted at 0x'+addr.toString(16)+': '+e.message,'err'); break; } }
+    if(i%16===15) log('  … '+(i+1)+'/'+pages+' probed, '+hits.length+' readable so far','mut');
+  }
+  log('Probe done: '+hits.length+'/'+pages+' addresses readable.', hits.length?'ok':'err');
+  if(hits.length){
+    // Summarise contiguous runs so the readable regions are obvious.
+    const runs=[]; let cur=null;
+    for(const h of hits){ if(cur && h.addr===cur.end+stride){ cur.end=h.addr; } else { cur={start:h.addr,end:h.addr}; runs.push(cur); } }
+    log('Readable regions:','ok');
+    for(const r of runs) log('  0x'+r.start.toString(16).padStart(8,'0')+' … 0x'+r.end.toString(16).padStart(8,'0'),'ok');
+  }
+  return hits;
 }
 // Operating mode. 55 17 17 AA -> 06 <mode>. Source: LogoPG.cpp GetPlcStatus/RecvControlResponse.
 const MODES={0x01:'RUN',0x20:'RUN_P (parameter mode)',0x42:'STOP'};
@@ -352,6 +393,19 @@ $('#connect').onclick=async()=>{
 };
 $('#ident').onclick=()=>pgConnect().catch(e=>log(e.message,'err'));
 $('#restart').onclick=async()=>{ try{ await pgRestart(); await pgConnect(); }catch(e){ log(e.message,'err'); } };
+$('#abort').onclick=()=>{ abortProbe=true; log('Stopping probe…','mut'); };
+$('#probe').onclick=async()=>{
+  try{
+    await pgRestart(); await pgConnect();
+    const m=await getMode();
+    if(m!==0x42){ log('Probe needs STOP mode — press “Send STOP” first.','err'); return; }
+    // Sanity-anchor on 1F02, the one address proven to work on real 0BA6 hardware.
+    log('Anchor check: reading the known-good ident byte at 0x00FF1F02…','mut');
+    try{ const id=await readByte(0x00FF1F02); log('Anchor OK — 0x00FF1F02 = 0x'+id.toString(16)+'. Read Byte works, so misses below are real.','ok'); }
+    catch(e){ log('Anchor FAILED: '+e.message,'err'); log('If the one address known to work is unreadable, the problem is not the address map.','err'); return; }
+    await probePages(0x00FF0000, 256, 0x100); // one byte per 256-byte page across the 0x00FF window
+  }catch(e){ log(e.message,'err'); }
+};
 $('#fw').onclick=async()=>{ try{ await pgConnect(); const m=await getMode(); if(m!==0x42) log('Firmware reads need STOP mode — press “Send STOP” first.','err'); await readFirmware(); }catch(e){ log(e.message,'err'); } };
 $('#mode').onclick=async()=>{ try{ await pgConnect(); await getMode(); }catch(e){ log(e.message,'err'); } };
 $('#stop').onclick=async()=>{ try{ await pgConnect(); await sendStop(); await getMode(); }catch(e){ log(e.message,'err'); } };
