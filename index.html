@@ -41,7 +41,7 @@
 </head>
 <body>
 <h1>LOGO! 0BA6 Program Dumper</h1>
-<p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA6</b> over the serial PG protocol, in your browser. Desktop uses Web Serial; Android Chrome uses WebUSB. Nothing is uploaded — it all runs locally.</p>
+<p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA6</b> over the serial PG protocol, in your browser (Chrome/Edge, desktop or Android). Two transports: <b>Web Serial</b> (the OS driver configures the cable — most reliable) and <b>WebUSB</b> (this tool configures the chip directly — needed where Web Serial doesn't list the cable). Nothing is uploaded — it all runs locally.</p>
 
 <div class="card warn">
   <b>Before you start</b> &mdash; plug the USB cable in, and put the LOGO! in <b>STOP</b> (ESC &rarr; Stop on the device; step 2 also does it). On Android use an OTG adapter and <b>Chrome</b>. Follow the numbered steps &mdash; the glowing button is the recommended next one. The log at the bottom records every byte; use <b>Copy log</b> to send it to me.
@@ -55,7 +55,7 @@
       <select id="transport" style="font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)">
         <option value="auto">Auto</option>
         <option value="serial">Web Serial</option>
-        <option value="usb">WebUSB (Android OTG)</option>
+        <option value="usb">WebUSB</option>
       </select>
     </label>
     <button id="stop" disabled>2 &middot; Put in STOP</button>
@@ -119,7 +119,7 @@
       <li>PG serial protocol (connect <code>0x21</code>, Read Block <code>0x05</code>, 4-byte addressing, XOR checksum) — <a href="https://github.com/brickpool/logo/wiki/PG-Protocol">brickpool/logo · PG-Protocol wiki</a> and its <a href="https://github.com/brickpool/logo/blob/master/src/LogoPG.cpp">LogoPG.cpp</a> source.</li>
       <li>Block/program-memory format (connector encoding, GF/SF opcodes, pointer table) — <a href="https://github.com/brickpool/logo/wiki/0BA5-Dekodierung">brickpool/logo · 0BA5-Dekodierung wiki</a>.</li>
       <li>Original address-space &amp; command reverse-engineering — SNATAX (0BA6) and cacalderon (0BA5, DE-9 pinout) on the <a href="https://forums.ni.com/t5/LabVIEW/LOGO-PLC-driver-based-on-LabVIEW/td-p/877701">NI LabVIEW forum</a>; neiseng on <a href="https://www.amobbs.com/thread-3705429-1-1.html">amobbs</a> (0BA5 data address space, password, cyclic read).</li>
-      <li>Browser APIs — <a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API">Web Serial API</a> (desktop), <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">WebUSB API</a> (Android).</li>
+      <li>Browser APIs — <a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API">Web Serial API</a> and <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">WebUSB API</a> (both work in Chrome/Edge on desktop and Android).</li>
       <li>Why Siemens' free demo can't do this: LOGO!Soft Comfort <a href="https://support.industry.siemens.com/cs/document/110002070/">V9 Demo</a> disables program transfer (full license 6ED1058-0BA08-0YA1 required).</li>
     </ul>
   </div>
@@ -174,7 +174,9 @@ async function connectWebSerial(){
   };
 }
 
-// ========== WebUSB (Android) — minimal chip drivers ==========
+// ========== WebUSB (desktop or Android) — minimal per-chip drivers ==========
+// Used when Web Serial doesn't enumerate the cable. Works on any platform with WebUSB;
+// the trade-off is that WE configure the chip's registers instead of the OS driver.
 // Show EVERY device and identify after, so an unknown-VID cable is never hidden.
 // The "show all" idiom is filters:[{}] — a list with ONE EMPTY filter object (matches
 // everything). filters:[] (an empty list) matches NOTHING and produces the misleading
@@ -191,7 +193,7 @@ async function connectWebUSB(){
   let iface, epIn, epOut;
   for(const i of dev.configuration.interfaces){ const a=i.alternate; const ins=a.endpoints.filter(e=>e.direction==='in'&&e.type==='bulk'); const outs=a.endpoints.filter(e=>e.direction==='out'&&e.type==='bulk'); if(ins.length&&outs.length){ iface=i; epIn=ins[0].endpointNumber; epOut=outs[0].endpointNumber; break; } }
   if(iface===undefined) throw new Error('No bulk endpoints found on this device');
-  try{ await dev.claimInterface(iface.interfaceNumber); }catch(e){ throw new Error('claimInterface failed ('+e.message+'). On Android another driver may hold the device.'); }
+  try{ await dev.claimInterface(iface.interfaceNumber); }catch(e){ throw new Error('claimInterface failed ('+e.message+'). Another driver may hold the device — on desktop, the OS serial driver has it (use Web Serial instead); on Android, close other apps using USB.'); }
   const vid=dev.vendorId;
   const cOut=(req,val,idx=0,data)=>dev.controlTransferOut({requestType:'vendor',recipient:'device',request:req,value:val,index:idx}, data);
   const cIn=(req,val,idx,len)=>dev.controlTransferIn({requestType:'vendor',recipient:'device',request:req,value:val,index:idx}, len);
@@ -708,8 +710,8 @@ $('#connect').onclick=async()=>{
     const emptyPicker = /NotFoundError|No port selected|No device selected/i.test(e.name+' '+e.message);
     if(emptyPicker){
       log('The picker had nothing to choose from, so the OS is not seeing the cable on the "'+mode+'" transport.','err');
-      if(mode==='serial' && hasUsb) log('→ Your cable did not appear as a serial port. Set the Transport dropdown to “WebUSB” and press Connect again — that is the path that works with OTG cables on Android.','err');
-      else if(mode==='usb') log('→ Android is not enumerating the cable through the OTG adapter. Try a USB mouse in the SAME adapter (if it works, OTG is fine, the issue is the cable); check chrome://device-log while re-plugging; enable the phone’s USB-OTG setting; use a real/powered host adapter.','err');
+      if(mode==='serial' && hasUsb) log('→ Your cable did not appear as a serial port. Set the Transport dropdown to “WebUSB” and press Connect again.','err');
+      else if(mode==='usb') log('→ No USB device to pick. On Android over OTG: try a USB mouse in the SAME adapter (if it works, OTG is fine and the issue is the cable), check chrome://device-log while re-plugging, enable the phone’s USB-OTG setting, use a real/powered host adapter. On desktop: the OS serial driver may already hold the cable — use Web Serial instead.','err');
       log('Most reliable path: plug into a Mac/Windows/Linux computer and use desktop Chrome.','mut');
     }
     applyState();
@@ -907,7 +909,7 @@ $('#dllog').onclick=()=>{
 };
 $('#clearlog').onclick=()=>{ logLines.length=0; logEl.replaceChildren(); };
 
-if(!('serial' in navigator) && !('usb' in navigator)) log('This browser has neither Web Serial nor WebUSB. Use Chrome/Edge (desktop) or Chrome (Android).','err');
+if(!('serial' in navigator) && !('usb' in navigator)) log('This browser has neither Web Serial nor WebUSB. Use Chrome or Edge (desktop or Android). Safari/iOS support neither.','err');
 if(location.protocol==='file:') $('#filenote').textContent='Opened as a local file — clipboard copy may be blocked; use Download log if Copy fails.';
 applyState();
 </script>
