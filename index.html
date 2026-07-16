@@ -56,6 +56,7 @@
     <button id="restart" class="sec" disabled>Restart (0x22)</button>
     <button id="probe" class="sec" disabled>Probe address space</button>
     <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
+    <button id="findmem" class="sec" disabled>Find real memory map (Read Block probe)</button>
     <button id="abort" class="sec" disabled>Stop probe</button>
     <button id="fw" class="sec" disabled>Read firmware (proves reads work)</button>
     <button id="mode" class="sec" disabled>Check mode (RUN/STOP)</button>
@@ -353,6 +354,54 @@ async function tryBlock(cmd, count, label){
   await xport.read(4096,60);
   return data;
 }
+// Read Block as an address VALIDATOR.
+// Read Byte does not fault on unmapped addresses -- it quietly returns 0x00, which is
+// why a Read Byte probe reported all 256 pages "readable" and the 0BA5 program offsets
+// then dumped 2460 zero bytes. Read Block rejects illegal ranges with 15 03, so it is
+// the tool that actually tells us where memory exists.
+async function probeBlocks(base, pages, stride, n){
+  abortProbe=false;
+  const hits=[];
+  log('Probing '+pages+' pages with Read Block ×'+n+' — unlike Read Byte, this FAULTS on unmapped memory.','mut');
+  for(let i=0;i<pages && !abortProbe;i++){
+    const addr=(base+i*stride)>>>0;
+    const cmd=new Uint8Array([0x05,(addr>>>24)&0xff,(addr>>>16)&0xff,(addr>>>8)&0xff,addr&0xff,(n>>8)&0xff,n&0xff]);
+    await xport.read(4096,40);
+    await xport.write(cmd);
+    const t0=await xport.read(1,1500);
+    let ok=false, data=null;
+    if(t0.length && t0[0]===0x06){
+      data=await xport.read(n,3000);
+      if(data.length===n){ await xport.read(1,800); ok=true; }
+    }
+    if(ok){
+      let nz=0; for(const d of data) if(d) nz++;
+      hits.push({addr,nz});
+      log('  LEGAL  0x'+addr.toString(16).padStart(8,'0')+'  '+nz+'/'+n+' non-zero  '+hex(data.slice(0,8)),'ok');
+    } else {
+      await recover();
+    }
+    if(i%16===15) log('  … '+(i+1)+'/'+pages+', '+hits.length+' legal so far','mut');
+  }
+  log('Read Block probe done: '+hits.length+'/'+pages+' pages are LEGAL ranges.', hits.length?'ok':'err');
+  const runs=[]; let cur=null;
+  for(const h of hits){ if(cur && h.addr===cur.end+stride){ cur.end=h.addr; cur.nz+=h.nz; } else { cur={start:h.addr,end:h.addr,nz:h.nz}; runs.push(cur); } }
+  if(runs.length){ log('Legal regions (Read Block accepts these):','ok');
+    for(const r of runs) log('  0x'+r.start.toString(16).padStart(8,'0')+' … 0x'+r.end.toString(16).padStart(8,'0')+'   ('+r.nz+' non-zero bytes sampled)','ok'); }
+  return hits;
+}
+// Program protection. A read password would explain an empty-looking program.
+// ADDR_PWD_R_EXISTS = 0x00FF48FF: 0x40 = set, 0x00 = none. Source: LogoPG.cpp.
+async function checkPassword(){
+  const p=await readByte(0x00FF48FF);
+  log('Password byte @0x00FF48FF = 0x'+p.toString(16).padStart(2,'0')+
+      (p===0x40?'  → A PASSWORD IS SET. Read protection would explain empty/blocked program reads.'
+       :p===0x00?'  → no password set.':'  → unexpected value.'), p===0x00?'ok':'err');
+  const m1=await readByte(0x00FF1F00), m2=await readByte(0x00FF1F01);
+  log('Password magic @1F00/1F01 = 0x'+m1.toString(16)+'/0x'+m2.toString(16)+'  (documented: 0x04/0x00)',
+      (m1===0x04&&m2===0x00)?'ok':'mut');
+  return p;
+}
 // Characterise Read Block: is it the address, the count, or the address width?
 async function blockDiag(){
   await pgRestart(); await pgConnect();
@@ -480,6 +529,15 @@ $('#ident').onclick=guard(async()=>{ await pgConnect(); });
 $('#restart').onclick=guard(async()=>{ await pgRestart(); await pgConnect(); });
 $('#abort').onclick=()=>{ abortProbe=true; log('Stopping…','mut'); };
 $('#blockdiag').onclick=guard(blockDiag);
+$('#findmem').onclick=guard(async()=>{
+  await pgRestart(); await pgConnect();
+  const m=await getMode();
+  if(m!==0x42){ log('Needs STOP mode — press “Send STOP” first.','err'); return; }
+  await checkPassword();
+  log('— Read Byte says every page is readable, but the 0BA5 program offsets dumped 2460 zeros. —','mut');
+  log('— Read Byte returns 0x00 for unmapped memory; Read Block faults. Trusting Read Block. —','mut');
+  await probeBlocks(0x00FF0000, 256, 0x100, 16);
+});
 $('#probe').onclick=guard(async()=>{
   await pgRestart(); await pgConnect();
   const m=await getMode();
