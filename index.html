@@ -37,6 +37,8 @@
   button.next:not(:disabled){box-shadow:0 0 0 3px color-mix(in srgb, var(--acc) 55%, transparent);animation:pulse 1.6s ease-in-out infinite}
   @keyframes pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb, var(--acc) 30%, transparent)}50%{box-shadow:0 0 0 5px color-mix(in srgb, var(--acc) 45%, transparent)}}
   #log .toolbar{display:flex;gap:8px;margin:8px 0 0}
+  button.armed{background:var(--err);border-color:var(--err);color:#fff;animation:armpulse .7s ease-in-out infinite}
+  @keyframes armpulse{0%,100%{opacity:1}50%{opacity:.6}}
 </style>
 </head>
 <body>
@@ -643,7 +645,10 @@ function applyState(){
     stop:C, mode:C, ident:C, restart:C, fw:C,
     unlock: ST && S.protected!==false && !S.unlocked,
     decode:ST, dump:ST, nametest:ST, findmem:ST, probe:ST, blockdiag:ST,
-    relock: ST && S.unlocked,
+    // Re-lock is safe whenever a password EXISTS on the device (protected===true) or we
+    // unlocked this session. It does NOT depend on this-session unlock state, so a fresh
+    // session (or a different computer) can re-lock a device left unprotected earlier.
+    relock: ST && (S.unlocked || S.protected===true),
     abort:true, decfile:true, copylog:true, dllog:true, clearlog:true,
   };
   document.querySelectorAll('button[id]').forEach(b=>{ if(b.id in en) b.disabled=!en[b.id]; });
@@ -672,14 +677,22 @@ function guard(fn){
 }
 // Two-click confirm for the two commands that WRITE to the PLC. First click arms for 4s;
 // second click within the window performs the write. Self-resetting, per-press.
+const ARM_MS=10000;
 function armWrite(id, run){
   const btn=$('#'+id);
   btn.onclick=()=>{
     if(busy){ log('Busy — wait for the current operation to finish.','err'); return; }
-    if(btn.dataset.armed){ clearTimeout(+btn.dataset.tmr); delete btn.dataset.armed; btn.textContent=btn.dataset.label; run(); return; }
+    if(btn.dataset.armed){ // second click within the window: do it
+      clearTimeout(+btn.dataset.tmr); delete btn.dataset.armed; btn.textContent=btn.dataset.label; btn.classList.remove('armed');
+      log('Confirmed — writing to the PLC…','ok');
+      run(); return;
+    }
+    // first click: arm, and SAY SO in the log so it never looks dead
     btn.dataset.label=btn.textContent; btn.dataset.armed='1';
-    btn.textContent='Click again to WRITE to the PLC';
-    btn.dataset.tmr=setTimeout(()=>{ if(btn.dataset.armed){ delete btn.dataset.armed; btn.textContent=btn.dataset.label; } },4000);
+    btn.textContent='⚠ CLICK AGAIN to write to the PLC';
+    btn.classList.add('armed');
+    log('⚠ This step WRITES to your PLC. Click the same button AGAIN within '+(ARM_MS/1000)+'s to confirm — or wait and it cancels.','err');
+    btn.dataset.tmr=setTimeout(()=>{ if(btn.dataset.armed){ delete btn.dataset.armed; btn.textContent=btn.dataset.label; btn.classList.remove('armed'); log('(write not confirmed in time — nothing was written)','mut'); } },ARM_MS);
   };
 }
 $('#connect').onclick=async()=>{
@@ -749,7 +762,13 @@ $('#fw').onclick=guard(async()=>{
   await readFirmware();
 });
 $('#mode').onclick=guard(async()=>{ await pgConnect(); await getMode(); });
-$('#stop').onclick=guard(async()=>{ await pgConnect(); await sendStop(); await getMode(); });
+$('#stop').onclick=guard(async()=>{
+  await pgConnect(); await sendStop(); const m=await getMode();
+  // Learn the protection state now, so unlock/re-lock enable correctly even in a fresh
+  // session that didn't run a read or an unlock yet.
+  if(m===0x42){ const p=await readByte(0x00FF48FF); st.protected=(p===0x40);
+    log('Password '+(p===0x40?'IS set (0x48FF=0x40) — use step 3 to unlock, step 5 to re-lock.':'is not set (0x48FF=0x'+p.toString(16)+').'), p===0x40?'mut':'ok'); applyState(); }
+});
 // Read Byte, not Read Block: Read Block is rejected on this hardware even at addresses
 // the prober shows are readable.
 $('#nametest').onclick=guard(async()=>{
