@@ -684,14 +684,6 @@ function guard(fn){
     finally{ busy=false; applyState(); }
   };
 }
-// Mobile suspends background tabs, which stalls the USB I/O a long operation is awaiting.
-// If we get backgrounded mid-run, abort cleanly instead of freezing in a stuck-busy state.
-document.addEventListener('visibilitychange', ()=>{
-  if(document.hidden && busy){
-    abortProbe=true;
-    log('⚠ Page backgrounded during an operation — aborting it. Mobile suspends background tabs, which stalls USB. Keep this tab in the foreground during reads/probes.','err');
-  }
-});
 // Two-click confirm for the two commands that WRITE to the PLC. First click arms for 4s;
 // second click within the window performs the write. Self-resetting, per-press.
 const ARM_MS=10000;
