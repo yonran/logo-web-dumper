@@ -1,0 +1,40 @@
+# LOGO! PG session capture — real hardware
+# device: identNo=45 mode=42 passwordExists=1 leaksCleartext=0 blockReadsWork=0
+# source: 0BA6.ES10, WebUSB / CH340, fw V1.07.07, 2026-07-16
+#
+# Format: one exchange per line, "→ <request hex>   ← <response hex | (nothing)>   (note)".
+# The consistency test (test/session-replay.test.ts) replays each request against a FakeDevice
+# built from the `# device:` header and asserts the fake produces exactly the recorded response.
+# Per-byte region reads (Read Byte loops in readRegion) are logged only as progress summaries by
+# the tool, so they are not individual exchanges here.
+
+# --- connect ---
+→ 22   ← 06   (Restart — clears the error state)
+→ 21   ← 06 03 21 45   (IdentNo 0x45 = 0BA6.ES10)
+
+# --- put in STOP (device was already stopped) ---
+→ 55 12 12 aa   ← (nothing)   (STOP command not acknowledged on an already-stopped device)
+→ 55 17 17 aa   ← 06 42   (mode = STOP)
+→ 02 00 ff 48 ff   ← 06 03 00 ff 48 ff 40   (password IS set)
+
+# --- unlock attempt (step 3) ---
+→ 22   ← 06
+→ 21   ← 06 03 21 45
+→ 55 17 17 aa   ← 06 42
+→ 02 00 ff 48 ff   ← 06 03 00 ff 48 ff 40
+→ 02 00 ff 1f 00   ← 06 03 00 ff 1f 00 04   (magic 1)
+→ 02 00 ff 1f 01   ← 06 03 00 ff 1f 01 00   (magic 2)
+→ 01 00 ff 47 40 00   ← 06   (Write Byte 0x00FF4740 = 0x00 — lower protection to level 1)
+
+# --- re-negotiate after the write ---
+→ 22   ← 06
+→ 21   ← 06 03 21 45
+→ 55 17 17 aa   ← 06 42
+# (password area 0x0566 ×10 and program probe 0x0EE8 ×16 read all-zero — reads suppressed)
+
+# --- read & decode (step 4) ---
+→ 22   ← 06
+→ 21   ← 06 03 21 45
+→ 55 17 17 aa   ← 06 42
+→ 02 00 ff 48 ff   ← 06 03 00 ff 48 ff 40
+# (pointer table / wiring / program read byte-wise, all-zero — reads suppressed)

@@ -49,6 +49,21 @@ and program-format facts live in `PROTOCOL.md`; the investigation log is `LAB-NO
 Deployment is automatic: pushing to `main` runs `.github/workflows/pages.yml`, which builds and
 publishes to GitHub Pages. `dist/` is not committed.
 
+### Recording hardware sessions
+
+Real device sessions are saved as fixtures in `test/fixtures/*.session` and replayed against the
+fake by `test/session-replay.test.ts`, which asserts the fake produces the exact recorded bytes
+— so the fakes can't silently drift away from what real hardware did. To capture a new session:
+
+1. Run the tool against a device, then press **Download log** (or **Copy log**).
+2. Save it as `test/fixtures/<device>-<date>.session`.
+3. Add a header line describing the device, e.g.
+   `# device: identNo=45 mode=42 passwordExists=1 leaksCleartext=0 blockReadsWork=0`
+   (hex for `identNo`/`mode`; `1`/`0` for the flags). The replay test parses `→ … ← …` lines and
+   ignores everything else. Per-byte region reads aren't individual log lines, so they're skipped.
+4. `npm test` — the new session is picked up automatically. A failure means the fake and the real
+   capture disagree; reconcile the fake (and PROTOCOL.md) with the observation.
+
 ## Sources & credits
 
 Siemens does not publicly document the PG protocol or the program format; everything here rests on community reverse-engineering. Full annotated documentation with per-fact citations is in **[PROTOCOL.md](PROTOCOL.md)**.
