@@ -22,12 +22,13 @@ with no record in the UI.
 Every time you push, **wait for the GitHub Pages build to finish before reporting done**, and
 confirm the new commit actually deployed.
 
-- This repo's Pages is **legacy branch-source** (`build_type: legacy`, source = `main`), not a
-  GitHub Actions workflow — so `gh run watch` does **not** apply (there is no Actions run).
-  Poll the Pages build API instead:
-  `gh api repos/yonran/logo-web-dumper/pages/builds/latest` and wait for `status` to reach
-  `built` (or `errored`).
-- Verify deployment, don't just trust `built`: fetch the live site
-  (`https://yonran.github.io/logo-web-dumper/`) and grep for a string unique to the new commit.
-- If the build is stuck/errored, check `https://www.githubstatus.com/api/v2/summary.json` for a
-  GitHub incident before assuming the commit is at fault.
+- This repo's Pages builds via **GitHub Actions** (`build_type: workflow`,
+  `.github/workflows/pages.yml`), so watch the run:
+  `gh run watch "$(gh run list --workflow=pages.yml --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status`.
+  The workflow runs `npm ci --ignore-scripts → lint → build (tsc) → deploy`, so a lint or type
+  error fails the deploy — run `npm run lint && npm run build` locally before pushing.
+- Verify deployment, don't just trust a green run: fetch the live site
+  (`https://yonran.github.io/logo-web-dumper/`) and grep for a string unique to the new commit;
+  `dist/` is built in CI and not committed, so also confirm e.g. `dist/main.js` returns 200.
+- If a run is stuck/failing for no code reason, check `https://www.githubstatus.com/api/v2/summary.json`
+  for a GitHub incident before assuming the commit is at fault.
