@@ -101,12 +101,19 @@
       <button id="nametest" class="sec" disabled>Read program name</button>
     </div>
     <div class="row">
+      <label>Mode <select id="dumpmode">
+        <option value="memory">Memory (Read Block, bare addr)</option>
+        <option value="register">Register (Read Byte, paged addr)</option>
+      </select></label>
       <label>Start addr (hex) <input id="addr" value="00002FAA"></label>
       <label>Length (bytes) <input id="len" value="13464"></label>
       <button id="dump" class="sec" disabled>Dump raw region &rarr; .bin</button>
     </div>
     <p class="mut" style="font-size:12.5px;margin:6px 0 0">
-      Debugging aids. The detected model supplies these defaults: the complete 0BA6 upload image is <code>13464</code> bytes from the bare <code>0x00002FAA</code> (program body <code>0x00003292</code>) — the program/offset-table are <code>Memory</code> reads, which are NOT paged, unlike the <code>0x00FF____</code> system registers; the complete legacy 0BA5 image is assembled from <code>0x0C14</code>, <code>0x0E20</code>, and <code>0x0EE8</code>. The password store is bare at <code>0x00000566</code>. Long captures use dependable single-byte reads; unlock diagnosis may try Read Block as a fallback. Uniform <code>0x00</code> or <code>0xFF</code> captures are saved because they can prove protection, emptiness, or a wrong map.
+      Debugging aids. <b>Mode</b> picks the read regime — the two are NOT interchangeable, and the wrong one reads zeros:
+      <br><b>Memory</b> = program/data memory: <code>Read Block (0x05)</code> on the 0BA6, byte reads on the 0BA5, with a <b>bare</b> address (never paged). Use it for the program image — e.g. the complete 0BA6 upload is <code>13464</code> bytes from the bare <code>0x00002FAA</code> (body <code>0x00003292</code>); the 0BA5 image is <code>0x0C14</code>/<code>0x0E20</code>/<code>0x0EE8</code>.
+      <br><b>Register</b> = symbolic register: <code>Read Byte (0x02)</code> with the <code>getAdress</code> page rule applied, so a base <code>48FF</code> reads the paged <code>0x00FF48FF</code> on a 0BA6 (a 0BA5 drops the page automatically). Use it for the flag/magic/ident/firmware/protection registers, the password store <code>0566</code>, or the program name <code>0570</code>.
+      <br>The detected model fills in sensible defaults per mode; edits you type are kept. Uniform <code>0x00</code>/<code>0xFF</code> captures are saved because they can prove protection, emptiness, or a wrong map.
     </p>
   </div>
 </details>

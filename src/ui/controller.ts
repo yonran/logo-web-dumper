@@ -38,6 +38,24 @@ export function wireUi(app: App): void {
   let busyLabel = '';
   const abortBtn = $<HTMLButtonElement>('#abort');
 
+  // Fill the raw-dump address/length with the sensible default for the current device AND the
+  // selected Mode. Called only when the device changes or the operator flips the Mode toggle —
+  // NOT on every render — so an address you type by hand is never clobbered mid-session.
+  let dumpDefaultsFor = '';
+  function fillDumpDefaults(): void {
+    if (!app.conn?.known) return;
+    if ($<HTMLSelectElement>('#dumpmode').value === 'register') {
+      // Program name: a short, byte-readable "are reads returning sane data?" probe.
+      $<HTMLInputElement>('#addr').value = '00000570';
+      $<HTMLInputElement>('#len').value = '16';
+    } else {
+      const first = app.conn.mem.regions[0];
+      $<HTMLInputElement>('#addr').value = first.base.toString(16).padStart(8, '0').toUpperCase();
+      $<HTMLInputElement>('#len').value = String(first.len);
+    }
+  }
+  $<HTMLSelectElement>('#dumpmode').onchange = () => fillDumpDefaults();
+
   // ---- button enablement + "do this next" glow, derived from state ----
   function render(s: Readonly<AppState>): void {
     const { enabled, next } = buttonEnablement(s);
@@ -50,11 +68,16 @@ export function wireUi(app: App): void {
     document.querySelectorAll('button').forEach((b) => b.classList.toggle('next', b.id === next && !b.disabled));
     if (app.conn?.known) {
       const mem = app.conn.mem;
-      const first = mem.regions[0];
       $<HTMLButtonElement>('#decode').textContent =
         mem.decode === 'legacy2460' ? '4 · Read program & decode' : '4 · Read program & save raw';
-      $<HTMLInputElement>('#addr').value = first.base.toString(16).padStart(8, '0').toUpperCase();
-      $<HTMLInputElement>('#len').value = String(first.len);
+      // Refill the dump defaults only when the DETECTED device changes (e.g. Identify finds a 0BA5),
+      // not on every state change — otherwise a hand-typed dump address would be wiped by any action.
+      if (dumpDefaultsFor !== app.conn.deviceName) {
+        dumpDefaultsFor = app.conn.deviceName;
+        fillDumpDefaults();
+      }
+    } else {
+      dumpDefaultsFor = '';
     }
   }
   app.store.subscribe(render);
