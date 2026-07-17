@@ -64,18 +64,19 @@ export async function connectWebUSB(log: Logger): Promise<Transport> {
 
   // --- configure 9600 8E1 per chip ---
   if (vid === 0x10c4) {
-    // CP210x
+    // CP210x — control writes go to the INTERFACE (recipient=interface, wIndex=interface number),
+    // per Linux cp210x_write_reg_block; the shared device-recipient helper above is wrong for it.
     log.log(
       'chip: CP210x — WebUSB driver NOT verified on hardware; if bytes are garbled, use desktop Web Serial instead.',
       'err',
     );
-    await cOut(0x00, 0x0001); // IFC_ENABLE
-    await cOut(0x1e, 0x0000, 0x0000, new Uint8Array([0x80, 0x25, 0, 0])); // SET_BAUDRATE 9600 LE
-    await dev.controlTransferOut(
-      { requestType: 'vendor', recipient: 'device', request: 0x1e, value: 0, index: 0 },
-      new Uint8Array([0x80, 0x25, 0, 0]),
-    );
-    await cOut(0x03, 0x0820); // SET_LINE_CTL: 8 data, even parity, 1 stop
+    const ifn = iface.interfaceNumber;
+    const cp = (req: number, val: number, data?: BufferSource): Promise<USBOutTransferResult> =>
+      dev.controlTransferOut({ requestType: 'vendor', recipient: 'interface', request: req, value: val, index: ifn }, data);
+    await cp(0x00, 0x0001); // IFC_ENABLE (UART_ENABLE)
+    await cp(0x1e, 0x0000, new Uint8Array([0x80, 0x25, 0, 0])); // SET_BAUDRATE 9600 (LE u32 = 0x2580)
+    await cp(0x03, 0x0820); // SET_LINE_CTL: 8 data, even parity, 1 stop
+    await cp(0x07, 0x0303); // SET_MHS: DTR+RTS asserted (0x01|0x02 with write-masks 0x0100|0x0200)
   } else if (vid === 0x1a86) {
     // CH340/CH341 — init mirrors Linux drivers/usb/serial/ch341.c
     log.log('chip: CH340/CH341', 'mut');
@@ -104,10 +105,16 @@ export async function connectWebUSB(log: Logger): Promise<Transport> {
       'err',
     );
     await cOut(0x00, 0x0000); // SIO_RESET
-    await cOut(0x03, 0x4138); // SIO_SET_BAUD_RATE: 9600 (FT232 divisor 0x4138)
+    await cOut(0x03, 0x4138); // SIO_SET_BAUD_RATE: 9600 (FT232BM/R divisor 0x4138)
     // SIO_SET_DATA: bits0-7 data(8=0x08), bits8-10 parity(even=2 -> 0x0200), bits11-13 stop(1=0).
     // 8E1 = 0x0208.
     await cOut(0x04, 0x0208);
+    // Assert DTR then RTS — FTDI cannot set both in one message, so two SIO_MODEM_CTRL writes
+    // (value = write-mask | line): DTR = 0x0100|0x01, RTS = 0x0200|0x02. Without these the LOGO
+    // PG interface never sees its handshake lines high (this was missing entirely before).
+    await cOut(0x01, 0x0101); // MODEM_CTRL: DTR high
+    await cOut(0x01, 0x0202); // MODEM_CTRL: RTS high
+    await cOut(0x02, 0x0000); // SIO_SET_FLOW_CTRL: no flow control
   } else {
     log.log(
       'chip: NO DRIVER for vendor ' +
