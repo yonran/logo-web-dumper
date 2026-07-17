@@ -1,16 +1,19 @@
-// Device (addressing) profile. The only real differences between 0BA5 and 0BA6 on this protocol
-// are the on-the-wire address WIDTH and the 0xFF paging of high addresses. We keep the ADDR
-// constants in their 0BA6-canonical form (high = 0x00FF____, low = 0x0000____); a 0BA5 device
-// simply sends the LOW 16 bits as a 2-byte address — which is exactly `addr & 0xFFFF`, since the
-// 0BA6 page only ever occupies the top 16 bits. So one field, `addrWidth`, captures the whole
-// difference. (Verified against LSC: Logo6.getAdress pages ≥0x1F00; DataTransfer.isAddress32
-// switches the wire width.)
+// Device profile: what differs between the LOGO! families this tool speaks to. Two things vary:
+//   1. the on-the-wire address WIDTH (2 bytes on 0BA5, 4 on 0BA6) — `addrWidth`;
+//   2. WHERE the program lives — the 0BA4/0BA5 map is low and bare, the 0BA6 map is high and paged
+//      (0x00FF____). This is NOT captured by addrWidth alone, so it lives in `mem` (ProgramMap).
+// The shared registers (password/name/protection) are the same across families via getAdress and
+// stay in constants.ts. Verified against LSC: Logo4.getMemories (0BA4/0BA5) vs Logo6.getMemories
+// (0BA6, inherited by ES3/ES10); getAdress pages addresses ≥0x1F00.
 
 import { IDENT_NAMES } from './constants.js';
 
 /** One contiguous span of the uploaded program image, in read order. */
 export interface ProgramRegion {
-  /** Wire address (pre-paging); a 2-byte device masks it to the low 16 bits. */
+  /**
+   * Wire address in this device's final form: the 0BA6 map stores it already paged (0x00FF____),
+   * the low legacy map stores it bare — a 2-byte device just masks to the low 16 bits at encode time.
+   */
   readonly base: number;
   readonly len: number;
   readonly name: string;

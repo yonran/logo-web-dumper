@@ -50,7 +50,7 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   const exists = await conn.readByte(ADDR.PWD_EXISTS);
   app.store.set({ protected: isPasswordSet(exists) });
   if (!isPasswordSet(exists)) {
-    app.log('Password byte @48FF = 0x' + exists.toString(16) + ' — no protection to recover. Skip to “4 · Read program & decode”.', 'ok');
+    app.log('Password byte @48FF = 0x' + exists.toString(16) + ' — no protection to recover. Skip to “4 · Read program & save”.', 'ok');
     return;
   }
   const g1 = await conn.readByte(ADDR.PWD_MAGIC1);

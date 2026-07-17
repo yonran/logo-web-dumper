@@ -132,6 +132,9 @@ export function wireUi(app: App): void {
       const pref = $<HTMLSelectElement>('#transport').value as TransportMode;
       try {
         await doConnect(app, pref);
+        // Point the raw-dump default at the detected device's program base (0x00FF3292 on 0BA6,
+        // 0x00000EE8 on 0BA5) instead of a permanently hard-coded value.
+        if (app.conn) $<HTMLInputElement>('#addr').value = app.conn.mem.programBase.toString(16).padStart(8, '0').toUpperCase();
       } finally {
         render(app.store.get());
       }

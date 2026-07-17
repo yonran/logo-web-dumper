@@ -47,11 +47,19 @@ export async function dumpRegion(app: App): Promise<void> {
   }
   const data = await conn.readRegion(addr, len, 'dump');
   let nz = 0;
-  for (const d of data) if (d) nz++;
-  if (nz === 0) {
-    app.log('Region is entirely 0x00 — protected/unmapped/empty. Nothing saved. (Unlock via step 3 if the program is protected.)', 'err');
-    return;
+  let nff = 0;
+  for (const d of data) {
+    if (d) nz++;
+    if (d === 0xff) nff++;
   }
+  // Always save — for investigation, a uniform 0x00 (protected/unmapped) or 0xFF (erased/wrong
+  // map) capture is itself evidence, not a failure. Just say clearly what it looks like.
   app.ui.download('logo_' + deviceSlug(conn.deviceName) + '_' + addrStr + '_' + len + '.bin', data);
-  app.log('Saved ' + data.length + ' bytes (' + nz + ' non-zero).', 'ok');
+  if (nz === 0) {
+    app.log('Saved ' + data.length + ' bytes — ENTIRELY 0x00 (protected/unmapped/empty; unlock via step 3 if protected).', 'err');
+  } else if (nff === data.length) {
+    app.log('Saved ' + data.length + ' bytes — ENTIRELY 0xFF (erased/empty or the wrong address for this device).', 'err');
+  } else {
+    app.log('Saved ' + data.length + ' bytes (' + nz + ' non-zero, ' + nff + ' × 0xFF).', 'ok');
+  }
 }
