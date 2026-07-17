@@ -41,27 +41,37 @@ export function wireUi(app: App): void {
     logEl.scrollTop = logEl.scrollHeight;
   });
 
+  // Label of the operation currently running (shown on the Stop button, e.g. "Stop program read").
+  let busyLabel = '';
+  const abortBtn = $<HTMLButtonElement>('#abort');
+
   // ---- button enablement + "do this next" glow, derived from state ----
   function render(s: Readonly<AppState>): void {
     const { enabled, next } = buttonEnablement(s);
     document.querySelectorAll<HTMLButtonElement>('button[id]').forEach((b) => {
       if (b.id in enabled) b.disabled = !enabled[b.id as keyof typeof enabled];
     });
+    // The Stop button only exists to interrupt a running operation: enabled only while busy.
+    abortBtn.disabled = !busy;
+    if (!busy) abortBtn.textContent = 'Stop';
     document.querySelectorAll('button').forEach((b) => b.classList.toggle('next', b.id === next && !b.disabled));
   }
   app.store.subscribe(render);
 
   // ---- action plumbing ----
-  function guard(fn: Action): () => Promise<void> {
+  function guard(fn: Action, label: string): () => Promise<void> {
     return async () => {
       if (busy) {
         app.log('Busy — wait for the current operation to finish (or press “Stop”).', 'err');
         return;
       }
       busy = true;
+      busyLabel = label;
       document.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
         if (!ALWAYS_ON.includes(b.id)) b.disabled = true;
       });
+      abortBtn.disabled = false;
+      abortBtn.textContent = 'Stop ' + label; // say what it's stopping
       try {
         await fn(app);
       } catch (e) {
@@ -73,16 +83,16 @@ export function wireUi(app: App): void {
     };
   }
 
-  /** Bind a plain button id to a guarded action. */
-  function on(id: string, fn: Action): void {
-    const run = guard(fn);
+  /** Bind a plain button id to a guarded action. `label` names the op for the Stop button. */
+  function on(id: string, fn: Action, label: string): void {
+    const run = guard(fn, label);
     $(`#${id}`).onclick = () => void run();
   }
 
   /** Two-click confirm for the commands that WRITE to the PLC. */
-  function armWrite(id: string, fn: Action): void {
+  function armWrite(id: string, fn: Action, label: string): void {
     const btn = $<HTMLButtonElement>(`#${id}`);
-    const run = guard(fn);
+    const run = guard(fn, label);
     btn.onclick = () => {
       if (busy) {
         app.log('Busy — wait for the current operation to finish.', 'err');
@@ -129,28 +139,29 @@ export function wireUi(app: App): void {
     })();
   };
 
-  // ---- session / diagnostics ----
-  on('ident', doIdentify);
-  on('restart', doRestart);
-  on('mode', doCheckMode);
-  on('stop', doStop);
-  on('fw', readFirmware);
-  on('nametest', nameTest);
-  on('findmem', findMemoryMap);
-  on('probe', probeAddressSpace);
-  on('blockdiag', blockDiag);
-  on('dump', dumpRegion);
-  on('decode', readAllAndDecode);
+  // ---- session / diagnostics ---- (label = what the Stop button says it's stopping)
+  on('ident', doIdentify, 'identify');
+  on('restart', doRestart, 'restart');
+  on('mode', doCheckMode, 'mode check');
+  on('stop', doStop, 'STOP command');
+  on('fw', readFirmware, 'firmware read');
+  on('nametest', nameTest, 'name read');
+  on('findmem', findMemoryMap, 'memory probe');
+  on('probe', probeAddressSpace, 'address probe');
+  on('blockdiag', blockDiag, 'block diagnostic');
+  on('dump', dumpRegion, 'dump');
+  on('decode', readAllAndDecode, 'program read');
 
   // ---- writes (armed) ----
-  armWrite('unlock', recoverPasswordAndUnlock);
-  armWrite('unlocknoreneg', recoverNoReneg);
-  armWrite('relock', relock);
+  armWrite('unlock', recoverPasswordAndUnlock, 'unlock');
+  armWrite('unlocknoreneg', recoverNoReneg, 'unlock');
+  armWrite('relock', relock, 're-lock');
 
-  // ---- abort ----
-  $('#abort').onclick = () => {
+  // ---- abort ---- (only meaningful while an operation is running)
+  abortBtn.onclick = () => {
+    if (!busy) return; // nothing to stop
     if (app.conn) app.conn.abort = true;
-    app.log('Stopping…', 'mut');
+    app.log('Stopping ' + busyLabel + '…', 'mut');
   };
 
   // ---- decode a saved file ----

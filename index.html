@@ -16,7 +16,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LOGO! 0BA6 Program Dumper (Web Serial / WebUSB)</title>
+<title>LOGO! 0BA5 / 0BA6 Program Dumper (Web Serial / WebUSB)</title>
 <style>
   :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#666; --line:#ccc; --acc:#1769aa; --ok:#137333; --err:#b3261e; --card:#f6f6f6; }
   @media (prefers-color-scheme: dark){ :root{ --bg:#14151a; --fg:#e8e8ea; --mut:#9aa0a6; --line:#333; --acc:#4ea1e0; --ok:#5bb974; --err:#f2857c; --card:#1e2028; } }
@@ -45,8 +45,13 @@
 </style>
 </head>
 <body>
-<h1>LOGO! 0BA6 Program Dumper</h1>
-<p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA6</b> over the serial PG protocol, in your browser (Chrome/Edge, desktop or Android). Two transports: <b>Web Serial</b> (the OS driver configures the cable — most reliable) and <b>WebUSB</b> (this tool configures the chip directly — needed where Web Serial doesn't list the cable). Nothing is uploaded — it all runs locally.</p>
+<h1>LOGO! 0BA5 / 0BA6 Program Dumper</h1>
+<p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA5 or 0BA6</b> over the serial PG protocol, in your browser (Chrome/Edge, desktop or Android). Two transports: <b>Web Serial</b> (the OS driver configures the cable — most reliable) and <b>WebUSB</b> (this tool configures the chip directly — needed where Web Serial doesn't list the cable). Nothing is uploaded — it all runs locally.</p>
+<p class="sub" style="font-size:12.5px">
+  <b>Works with:</b> LOGO! <b>0BA6</b> (0BA6 / 0BA6.ES3 / 0BA6.ES10, part <code>6ED1052-…-0BA6</code>) and <b>0BA5</b> — the generations with the 4-wire RS-232 <b>PG serial</b> interface (9600 8E1). The device is auto-detected on connect. 0BA5 is implemented but not yet verified on real 0BA5 hardware.<br>
+  <b>Does NOT work with:</b> LOGO! <b>0BA7 / 0BA8 (LOGO!8)</b> — those use Ethernet, a completely different protocol; and 0BA4 / earlier.<br>
+  <b>Cable / serial:</b> the USB LOGO! programming cable (or any USB-serial adapter — FTDI, CP210x, CH340/CH341, Prolific). <b>Web Serial</b> (desktop Chrome/Edge) works with any chip the OS has a driver for; <b>WebUSB</b> drives the chip itself — <b>CH340/CH341 is verified</b>, CP210x and FTDI are best-effort/unverified. <b>Browsers:</b> Chrome/Edge on desktop, or Chrome on Android via a USB-OTG adapter. Safari, Firefox, and iOS are <b>not</b> supported (no Web Serial / WebUSB).
+</p>
 
 <div class="card warn">
   <b>Before you start</b> &mdash; plug the USB cable in, and put the LOGO! in <b>STOP</b> (ESC &rarr; Stop on the device; step 2 also does it). On Android use an OTG adapter and <b>Chrome</b>. Follow the numbered steps &mdash; the glowing button is the recommended next one. The log at the bottom records every byte; use <b>Copy log</b> to send it to me.

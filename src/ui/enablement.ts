@@ -20,7 +20,6 @@ export const BUTTON_IDS = [
   'probe',
   'blockdiag',
   'relock',
-  'abort',
   'decfile',
   'copylog',
   'dllog',
@@ -56,7 +55,8 @@ export function buttonEnablement(s: AppState): Enablement {
     // Re-lock is safe whenever a password EXISTS or we unlocked this session — cross-session by
     // design, so a fresh session can re-lock a device left unprotected earlier.
     relock: ST && (s.unlocked || s.protected === true),
-    abort: true,
+    // NB: `abort` (the "Stop" button) is intentionally not here — it is runtime-driven (only
+    // enabled while an operation is running), handled in the controller, not from AppState.
     decfile: true,
     copylog: true,
     dllog: true,

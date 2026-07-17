@@ -4,6 +4,22 @@ Read and decode the circuit program from a **Siemens LOGO! 0BA5 / 0BA6** small P
 
 **Live tool: https://yonran.github.io/logo-web-dumper/**
 
+## Compatibility
+
+**Devices** — the serial-PG generations, auto-detected on connect:
+
+- ✅ **LOGO! 0BA6** — `0BA6`, `0BA6.ES3`, `0BA6.ES10` (part `6ED1052-…-0BA6`). Primary target, tested on real hardware.
+- ⚠️ **LOGO! 0BA5** — implemented (2-byte addressing), but **not yet verified on real 0BA5 hardware**.
+- ❌ **LOGO! 0BA7 / 0BA8 (LOGO!8)** — **not supported**: these use Ethernet, a completely different protocol.
+- ❌ **0BA4 and earlier** — not supported.
+
+**Cable / serial link** — the 4-wire RS-232 **PG interface at 9600 8E1**, via the USB LOGO! programming cable (or any USB-serial adapter). The cable's USB-serial bridge can be FTDI, Silicon Labs CP210x, WCH CH340/CH341, or Prolific:
+
+- **Web Serial** (desktop Chrome/Edge) — the **OS driver** configures the cable, so **any** chip with a driver works. Most reliable.
+- **WebUSB** (desktop or Android) — this tool configures the chip itself: **CH340/CH341 is verified on hardware**; **CP210x and FTDI are best-effort / unverified**; unknown chips aren't configured.
+
+**Browsers** — Chrome or Edge on desktop (Windows/macOS/Linux), or Chrome on Android via a USB-OTG adapter. **Safari, Firefox, and iOS are not supported** (they have neither Web Serial nor WebUSB).
+
 ## Why
 
 Siemens' LOGO!Soft Comfort *Demo* can't transfer programs (the Transfer menu is disabled without a paid license). This tool talks the LOGO! **PG serial protocol** directly through your USB programming cable, so you can dump and read a 0BA6 program for free.

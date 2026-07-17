@@ -10,7 +10,20 @@ Documentation of everything this tool relies on to read and decode a **Siemens L
 
 The part number `6ED1052-1FB00-0BA6` denotes the LOGO! **0BA6** generation. 0BA0–0BA6 use a 4-wire RS-232-compatible serial PG interface; 0BA7/0BA8 moved to Ethernet and do **not** use this protocol.
 
-Source: brickpool/logo PG-Protocol wiki (Introducing PG Protocol); Siemens LOGO! ordering data.
+**Compatibility of this tool:**
+
+| IdentNo | Device | Supported? |
+|---|---|---|
+| `0x45` | 0BA6.ES10 | ✅ yes (primary target, hardware-tested) |
+| `0x44` | 0BA6.ES3 | ✅ yes (4-byte addressing) |
+| `0x43` | 0BA6 | ✅ yes |
+| `0x42` | 0BA5 | ⚠️ implemented (2-byte addressing, auto-detected) but **unverified on real 0BA5 hardware** |
+| `0x40` | 0BA4 | ❌ no (would need its own address map; untested) |
+| — | 0BA7 / 0BA8 (LOGO!8) | ❌ no — **Ethernet**, a different protocol entirely (see the SySS `slig` tooling for those) |
+
+So: **LOGO! 0BA5 and 0BA6** (any ES variant), the serial-PG generations. The physical link is the **4-wire RS-232 PG interface at 9600 8E1** via the USB programming cable (or any USB-serial adapter — see §2).
+
+Source: brickpool/logo PG-Protocol wiki (Introducing PG Protocol); Siemens LOGO! ordering data; IdentNo values cross-checked against `LogoPG.cpp` and this tool's own detection.
 
 ---
 

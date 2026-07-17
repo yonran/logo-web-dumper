@@ -15,8 +15,9 @@ test('disconnected: only connect + always-on enabled; connect glows', () => {
   assert.equal(enabled.decode, false);
   assert.equal(enabled.unlock, false);
   assert.equal(enabled.relock, false);
-  assert.equal(enabled.abort, true);
   assert.equal(enabled.copylog, true);
+  // `abort` is not state-driven (it's runtime/busy-driven), so it isn't in the enablement map.
+  assert.equal('abort' in enabled, false);
   assert.equal(next, 'connect');
 });
 
