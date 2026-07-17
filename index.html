@@ -105,7 +105,7 @@
       <button id="dump" class="sec" disabled>Dump raw region &rarr; .bin</button>
     </div>
     <p class="mut" style="font-size:12.5px;margin:6px 0 0">
-      Debugging aids. On a 0BA6.ES10 the program lives at <code>0x00FF0EE8</code> under the <code>0x00FF____</code> page; reads use single-byte Read Byte because Read Block is rejected on this hardware. Read Byte returns <code>0x00</code> for protected/unmapped memory (it does not fault), so an all-zero region means "protected or empty," not "read failed."
+      Debugging aids. On a 0BA6.ES10 the program lives at the bare <code>0x00000EE8</code> (only addresses &ge; <code>0x1F00</code>, e.g. the system registers, take the <code>0x00FF____</code> page); reads use single-byte Read Byte because Read Block is rejected on this hardware. Read Byte returns <code>0x00</code> for protected/unmapped memory (it does not fault), so an all-zero region means "protected or empty," not "read failed."
     </p>
   </div>
 </details>

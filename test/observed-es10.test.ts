@@ -62,20 +62,23 @@ test('password exists: Read Byte 0x00FF48FF → 0x40', async () => {
 
 test('protected program byte reads back 0x00 via Read Byte (no fault)', async () => {
   const dev = new FakeDevice({ ...ES10, program: new Uint8Array([0xab]) });
-  // 0x00FF0EE8, would be 0xAB if readable, but protection holds → 0x00.
-  assert.deepEqual(await exchange(dev, [0x02, 0x00, 0xff, 0x0e, 0xe8], 7), [0x06, 0x03, 0x00, 0xff, 0x0e, 0xe8, 0x00]);
+  // Bare 0x00000EE8 (the CORRECT program address): the byte is 0xAB but protection holds → 0x00.
+  // (Reading the disproved paged 0x00FF0EE8 would also return 0x00, but only because it is
+  // unmapped — which tests nothing about protection.)
+  assert.deepEqual(await exchange(dev, [0x02, 0x00, 0x00, 0x0e, 0xe8], 7), [0x06, 0x03, 0x00, 0x00, 0x0e, 0xe8, 0x00]);
 });
 
 test('Read Block replies 06 THEN 15 03 (pre-parse ACK, then exception) — PROTOCOL.md §3.2', async () => {
   const dev = new FakeDevice(ES10);
-  // → 05 00 ff 0e e8 07 d0  (count 0x07D0 = 2000), exactly as recorded.
-  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0xff, 0x0e, 0xe8, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
+  // → 05 00 00 0e e8 07 d0  (bare 0x00000EE8, count 0x07D0 = 2000). The ES10 rejects Read Block
+  // before parsing the address, so the 06-then-15-03 rejection is the same at any address.
+  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0x00, 0x0e, 0xe8, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
 });
 
 test('a single exception latches the session until Restart (PROTOCOL.md §3.2a)', async () => {
   const dev = new FakeDevice(ES10);
   // Read Block faults and latches.
-  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0xff, 0x0e, 0xe8, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
+  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0x00, 0x0e, 0xe8, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
   // Now even a normally-readable Read Byte (ident anchor 1F02) is refused.
   assert.deepEqual(await exchange(dev, [0x02, 0x00, 0xff, 0x1f, 0x02], 7), [0x15, 0x03]);
   // Restart clears it …

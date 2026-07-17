@@ -95,7 +95,7 @@ The LOGO! sends `0x06` immediately on receiving the `0x05` byte, then streams th
 
 Source: brickpool/logo PG-Protocol wiki (Read Block Command 05, incl. the note on the immediate ACK); `ReadBlock()` in `src/LogoPG.cpp` (4-byte address path, XOR loop).
 
-> Note: `ReadBlock` is invoked exactly **once** in the reference library — `ReadBlock(ADDR_PWD_R_MEM, 10, …)`, i.e. 10 bytes at `0x00FF0566`. Every other documented access uses single-byte `ReadByte`. Block reads of the program area are not exercised by any known working implementation.
+> Note: `ReadBlock` is invoked exactly **once** in the reference library — `ReadBlock(ADDR_PWD_R_MEM, 10, …)`, i.e. 10 bytes at the password store (bare `0x00000566` on the wire, see the paging rule below). Every other documented access uses single-byte `ReadByte`. Block reads of the program area are not exercised by any known working implementation.
 
 ### 3.2a Exception response — and the Restart trap (`0x22`)
 
@@ -174,18 +174,21 @@ Read Byte 0x00FF1F01  →  0x00   (magic, sanity)
 
 ```
 Read  0x00FF48FF                 ← password flag (isPWProtected)
-Read  0x00FF0566 .. 0x00FF056F   ← 10-byte cleartext password (uploadPassword, stop at first 0)
+Read  0x00000566 .. 0x0000056F   ← 10-byte cleartext password (uploadPassword, stop at first 0)
                                    (Read Byte on 0BA6.ES10; Read Block is rejected)
 [compare entered vs stored IN THE PC — no password is ever sent to the device]
 Write Byte 0x00FF4800 = 0x00     ← clear protection (clearPasswordOnLogo). THE UNLOCK WRITE.
 ```
 
-Verified LSC addresses (`getAdress` returns the 16-bit value; the 0BA6 32-bit form prepends `0x00FF`):
+Verified LSC addresses. `getAdress` returns the 16-bit value; the 0BA6 32-bit wire form ORs
+`0xFF0000` **only for addresses ≥ `0x1F00`** (system registers). Anything below stays a bare
+`0x0000____` — so the password store and program are *not* paged, but the flag and the
+protection registers (all ≥ `0x1F00`) are:
 
-| Symbolic (LSC) | 16-bit | 0BA6 | Role |
+| Symbolic (LSC) | 16-bit | 0BA6 wire | Role |
 |---|---|---|---|
 | `ADR_PASSWORD_FLAG` | `0x48FF` | `0x00FF48FF` | read: password present? |
-| `ADR_PASSWORD` | (`0x0566`) | `0x00FF0566` | read: 10-byte cleartext |
+| `ADR_PASSWORD` | (`0x0566`) | `0x00000566` | read: 10-byte cleartext |
 | `ADR_CLEAR_PASSWORD_ACTIVE` | `0x4800` | `0x00FF4800` | write 0 → **clear protection (unlock)** |
 | `ADR_SET_PASSWORD_ACTIVE` | `0x4801` | `0x00FF4801` | write 0 → **set protection (re-lock)** |
 

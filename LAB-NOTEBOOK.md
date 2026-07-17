@@ -44,8 +44,9 @@ Unanimous, independent conclusion:
   of them submits a password for the *device* to validate.
 - The reference `SetSessionPassword()` (brickpool `LogoPG.cpp`), despite its name, never puts
   the password on the wire. It writes protection-level 1 to `0x00FF4740`, **reads the stored
-  cleartext back** from `0x00FF0566`, and `strncmp()`s it **on the host**. "Login" = read +
-  local compare.
+  cleartext back** from `0x00FF0566` (brickpool's paged value — the wrong one we inherited; the
+  correct 0BA6 wire address is the bare `0x00000566`, see below), and `strncmp()`s it **on the
+  host**. "Login" = read + local compare.
 - Decisive architectural fact (mikrocontroller.net #474631, corroborating a captured session):
   the **device sends the password to the PC** in cleartext; LOGO!Soft Comfort itself does the
   same read-and-compare. The typed-password prompt is a client-side UI gate, not a device check.
