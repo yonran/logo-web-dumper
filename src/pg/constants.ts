@@ -19,8 +19,12 @@ export const ADDR = {
   IDENT: 0x00ff1f02, // ident byte (proven readable on 0BA6.ES10)
   FW_START: 0x00ff1f03, // firmware string "V.." runs 1F03..1F08
   FW_END: 0x00ff1f08,
-  PWD_EXISTS: 0x00ff48ff, // 0x40 = password set, 0x00 = none (LSC ADR_PASSWORD_FLAG)
-  PWD_MEM: 0x00ff0566, // 10-byte password store (cleartext on 0BA5/0BA6)
+  PWD_EXISTS: 0x00ff48ff, // 0x40 = password set (LSC ADR_PASSWORD_FLAG; ≥0x1F00 → 0x00FF page)
+  // Program-region addresses are BARE (no 0x00FF page). Verified from LSC Logo6.getAdress: it
+  // only ORs 0xFF0000 onto addresses ≥ 0x1F00; anything below stays a bare 16-bit value, sent as
+  // a 4-byte address 0x0000____. Our old 0x00FF0566 / 0x00FF0EE8 were wrong (they read zeros
+  // while the ≥0x1F00 system registers worked), which is why every program/password read failed.
+  PWD_MEM: 0x00000566, // 10-byte password store
   // Protection registers, VERIFIED by decompiling LOGO!Soft Comfort V8.0
   // (DE.siemens.ad.logo.model.hardware.Modular0.getAdress + clearPasswordOnLogo/set method).
   // LSC clears protection by writing 0 to 0x4800 and re-sets it by writing 0 to 0x4801.
@@ -31,10 +35,10 @@ export const ADDR = {
   // reference; 0x4740 is what this tool used to write and it never took on the 0BA6.ES10.
   PL_LEVEL1: 0x00ff4740, // brickpool "level 1 (no protection)" — NOT what LSC writes
   PL_LEVEL3: 0x00ff4100, // brickpool "level 3 (read/write protection)"
-  PROG_NAME: 0x00ff0570, // 16-byte ASCII program name
-  PTR_TABLE: 0x00ff0c14, // 260-byte pointer table
-  OUT_WIRING: 0x00ff0e20, // 200-byte output/marker wiring
-  PROGRAM: 0x00ff0ee8, // 2000-byte program memory
+  PROG_NAME: 0x00000570, // 16-byte ASCII program name (bare, < 0x1F00)
+  PTR_TABLE: 0x00000c14, // 260-byte pointer table (bare)
+  OUT_WIRING: 0x00000e20, // 200-byte output/marker wiring (bare)
+  PROGRAM: 0x00000ee8, // 2000-byte program memory (bare)
 } as const;
 
 export const PWD_EXISTS_YES = 0x40;

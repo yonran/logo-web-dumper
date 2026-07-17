@@ -195,23 +195,33 @@ Source: **LOGO!Soft Comfort V8.0 bytecode** (`Modular0.getAdress` → `ADR_CLEAR
 
 ## 4. Address map (0BA6)
 
-On 0BA6 the 16-bit 0BA5 addresses live under a `0x00FF____` page. Verified for the system registers in the library (e.g. password-exists at 0BA5 `0x48FF` → 0BA6 `0x00FF48FF`; password store `0x0566` → `0x00FF0566`; ident `0x1F02` → `0x00FF1F02`). By the same mapping the program-related regions become:
+**The 0BA6 address expansion is CONDITIONAL — verified from LSC `Logo6.getAdress`:** it takes the base 16-bit address and ORs the `0xFF0000` page onto it **only if the address is ≥ `0x1F00`**. Everything below `0x1F00` stays a **bare** 16-bit value, transmitted as a 4-byte address `0x0000____`.
 
-| Region | 0BA5 addr | 0BA6 addr (this tool) | Bytes | Meaning |
+```java
+addr = super.getAdress(id);         // base 16-bit
+if (addr >= 0x1F00) addr |= 0xFF0000;   // page only the high addresses
+```
+
+So the program/password-store regions are **bare**, and only the system registers get the `0x00FF` page:
+
+| Region | base | 0BA6 4-byte addr | Bytes | Meaning |
 |---|---|---|---|---|
-| Program name | `0570` | `0x00FF0570` | 16 | ASCII name (self-test target) |
-| Block-name index | `05C0` | `0x00FF05C0` | 64 | — |
-| Block names | `0600` | `0x00FF0600` | 512 | — |
-| Pointer table | `0C14` | `0x00FF0C14` | 260 | 130 × 16-bit pointers to blocks |
-| Output/marker wiring | `0E20` | `0x00FF0E20` | ~200 | Q/M/AQ/X input wiring |
-| Program memory | `0EE8`–`16B7` | `0x00FF0EE8` | 2000 | the blocks |
-| Password exists | `48FF` | `0x00FF48FF` | 1 | `0x40` = yes |
+| Password store | `0566` | **`0x00000566`** | 10 | cleartext password |
+| Program name | `0570` | **`0x00000570`** | 16 | ASCII name |
+| Pointer table | `0C14` | **`0x00000C14`** | 260 | 130 × 16-bit block pointers |
+| Output/marker wiring | `0E20` | **`0x00000E20`** | ~200 | Q/M/AQ/X wiring |
+| Program memory | `0EE8` | **`0x00000EE8`** | 2000 | the blocks |
+| Password exists | `48FF` | `0x00FF48FF` | 1 | `0x40` = yes (≥0x1F00 → paged) |
+| Magic / ident / fw | `1F00`–`1F08` | `0x00FF1F00`+ | — | ≥0x1F00 → paged |
+| Clear / set protection | `4800`/`4801` | `0x00FF4800/4801` | 1 | ≥0x1F00 → paged |
 
-> ⚠️ The `0x00FF` prefix for the **program** regions is an inference from the confirmed system-register mapping, not independently documented for 0BA6. The tool's "read program name" self-test exists to confirm it: readable ASCII at `0x00FF0570` ⇒ mapping correct.
+> 🔴 **Correction (this is the big one).** Earlier versions of this tool put the `0x00FF` page on
+> **every** address, so it read the program/password at `0x00FF0566` / `0x00FF0EE8` — the WRONG
+> addresses. Those are below `0x1F00`, so LSC addresses them **bare** (`0x00000566` / `0x00000EE8`).
+> This is exactly why every program/password read returned zeros while the ≥`0x1F00` system
+> registers (`48FF`, `1F00`, `4800`) worked. The tool now uses the bare addresses.
 
-> ⚠️ **Appendix A of the PG-Protocol reference documents the address scheme for 0BA5 only — there is no published 0BA6 address table.** The rows above are the 0BA5 map lifted onto the `0x00FF____` page. That extrapolation is confirmed for the system registers (`1F02`, `48FF`, `0566`) because the library reads them on real 0BA6 hardware, but the program regions (`0570`, `0C14`, `0E20`, `0EE8`) are **unverified on 0BA6**. The 0BA6 also has a larger program capacity (200 blocks vs 130), so its program area plausibly differs in both base and length.
->
-> **Status on real hardware (0BA6.ES10, IdentNo `0x45`, confirmed STOP mode):** block reads at `0x00FF0570 ×16` and `0x00FF0EE8 ×2000` both return `15 03` (illegal access). Whether that reflects a genuinely wrong address or merely a session already latched into the error state (§3.2a) is **not yet resolved** — the observation predates this tool sending `0x22`. Retest after a Restart before concluding the map is wrong.
+Source: LOGO!Soft Comfort V8.0 bytecode — `DE.siemens.ad.logo.model.hardware.Logo6.getAdress` (the `addr >= 0x1F00 ? addr | 0xFF0000 : addr` rule).
 
 Source: 0BA5 addresses from brickpool/logo 0BA5-Dekodierung wiki (Appendix A / Adressübersicht) and PG-Protocol wiki (Appendix A). 0BA6 `0x00FF____` prefix from the `ADDR_*` constants in `src/LogoPG.cpp`.
 

@@ -68,7 +68,7 @@ test('Read Block is rejected on the ES10 model (tryBlock → null)', async () =>
 test('Read Block returns data (with valid XOR) when the device supports it', async () => {
   const prog = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   const { c } = make({ blockReadsWork: true, program: prog });
-  const r = await c.tryBlock(new Uint8Array([0x05, 0x00, 0xff, 0x0e, 0xe8, 0x00, 0x0a]), 10, 'blk');
+  const r = await c.tryBlock(new Uint8Array([0x05, 0x00, 0x00, 0x0e, 0xe8, 0x00, 0x0a]), 10, 'blk'); // bare 0x0EE8
   assert.ok(r);
   assert.deepEqual([...r], [...prog]);
 });

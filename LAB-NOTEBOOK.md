@@ -159,6 +159,26 @@ the `0x4800` write is a genuinely new experiment. Pending a hardware run.
 > would also stall — it has no magic path. But our goal is just to read the program, so writing
 > `0x4800` directly (which LSC never does without the compare) is still worth testing.
 
+**Hardware run of the 0x4800 fix (2026-07-16): still all zero.** `→ 01 00 ff 48 00 00 ← 06`, but
+`0x0566` and `0x0EE8` still read zero. Which led to the actual bug:
+
+### The addresses were wrong all along — `Logo6.getAdress` (the real fix)
+
+Disassembled `DE.siemens.ad.logo.model.hardware.Logo6.getAdress`: the 0BA6 page expansion is
+**conditional** — it ORs `0xFF0000` onto the base address **only when it is ≥ `0x1F00`**; below
+that, the address stays **bare** (`0x0000____`).
+
+This fits every observation exactly: every address the tool read successfully is ≥ `0x1F00`
+(`48FF`, `1F00`, `1F02`, `4800` → paged `0x00FF____`), and every address that returned zero is
+< `0x1F00` (`0566`, `0EE8`, `0570`, `0C14`, `0E20`). **We had been reading the program/password at
+`0x00FF0566` / `0x00FF0EE8`; the correct 0BA6 addresses are the bare `0x00000566` / `0x00000EE8`.**
+So a read of `0x00` was "wrong/unmapped address", not "protected" — and the `0x4800` clear may
+have been working the whole time while we read the wrong place.
+
+**Tool change:** program-region addresses (`PWD_MEM`, `PROGRAM`, `PROG_NAME`, `PTR_TABLE`,
+`OUT_WIRING`) dropped from `0x00FF____` to bare `0x0000____`; system registers unchanged. Pending
+a hardware retest — this is the most likely real fix so far.
+
 ---
 
 ## Live hypotheses (post-E1a/E1b)
