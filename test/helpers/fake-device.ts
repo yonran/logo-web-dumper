@@ -134,10 +134,13 @@ export class FakeDevice implements Transport {
       return;
     }
     if (op === 0x05) {
-      // Read Block: on the ES10 this is rejected (and latches the session).
+      // Read Block: on the 0BA6.ES10 this is rejected. Observed exactly (PROTOCOL.md §3.2):
+      // the LOGO! sends 0x06 immediately on receiving the 0x05 command byte — before it has
+      // parsed the address — THEN the 15 03 exception where the data block was expected, and
+      // the session latches until a Restart. So the reply is `06 15 03`, NOT a bare `15 03`.
       if (!this.cfg.blockReadsWork) {
         this.latched = true;
-        this.push(0x15, 0x03);
+        this.push(0x06, 0x15, 0x03);
         return;
       }
       const a = FakeDevice.addr(cmd);
