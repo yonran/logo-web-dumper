@@ -25,7 +25,9 @@ export interface FakeDeviceConfig {
   identNo?: number; // connect reply; default 0x45 (0BA6.ES10). 0x42 → 0BA5 (2-byte addressing).
   mode?: number; // 0x42 STOP / 0x01 RUN; default STOP
   passwordExists?: boolean; // 0x48FF === 0x40; default false
-  leaksCleartext?: boolean; // does the firmware leak the cleartext? default false (ES10 holds)
+  // Two INDEPENDENT firmware behaviours (the ES10 has neither; a fully-leaking device has both):
+  leaksCleartext?: boolean; // is the password store at 0x0566 readable? default false (ES10 hides it)
+  clearWriteUnlocks?: boolean; // does writing 0x4800=0 then expose program memory? default false
   blockReadsWork?: boolean; // does Read Block 0x05 succeed? default false (ES10 rejects)
   password?: string; // stored cleartext (≤10 chars)
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
@@ -49,7 +51,9 @@ export class FakeDevice implements Transport {
   private protectionLowered = false;
   private flakyLeft: number;
   private readonly addrWidth: 2 | 4;
-  private readonly cfg: Required<Pick<FakeDeviceConfig, 'identNo' | 'passwordExists' | 'leaksCleartext' | 'blockReadsWork'>> &
+  private readonly cfg: Required<
+    Pick<FakeDeviceConfig, 'identNo' | 'passwordExists' | 'leaksCleartext' | 'clearWriteUnlocks' | 'blockReadsWork'>
+  > &
     FakeDeviceConfig;
   private readonly pwdMem = new Map<number, number>(); // password store — leaks without any write
   private readonly progMem = new Map<number, number>(); // program etc. — needs the clear write
@@ -60,6 +64,7 @@ export class FakeDevice implements Transport {
       identNo: config.identNo ?? 0x45,
       passwordExists: config.passwordExists ?? false,
       leaksCleartext: config.leaksCleartext ?? false,
+      clearWriteUnlocks: config.clearWriteUnlocks ?? false,
       blockReadsWork: config.blockReadsWork ?? false,
       ...config,
     };
@@ -93,11 +98,16 @@ export class FakeDevice implements Transport {
     return base >= 0x1f00 ? (base | 0xff0000) >>> 0 : base;
   }
 
+  // Whether the password STORE (0x0566) hands back bytes — independent of the program.
   private pwdReadable(): boolean {
     return !this.cfg.passwordExists || this.cfg.leaksCleartext;
   }
+  // Whether the PROGRAM area reads back real data. Protected until a 0x4800 clear write AND the
+  // firmware actually honours it (clearWriteUnlocks). Deliberately NOT tied to leaksCleartext, so a
+  // test can model "password hidden, but the clear write still opens the program" — the outcome we
+  // hoped for on the ES10 — separately from whether the password itself leaked.
   private progReadable(): boolean {
-    return !this.cfg.passwordExists || (this.cfg.leaksCleartext && this.protectionLowered);
+    return !this.cfg.passwordExists || (this.protectionLowered && this.cfg.clearWriteUnlocks);
   }
 
   private push(...bytes: number[]): void {

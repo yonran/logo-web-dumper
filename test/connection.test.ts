@@ -62,7 +62,7 @@ test('readByte returns 0x00 for protected secret memory without faulting', async
 });
 
 test('leaking device: password store reads directly; program needs the 0x4800 clear write', async () => {
-  const { c } = make({ passwordExists: true, leaksCleartext: true, password: 'Kp', program: new Uint8Array([0xaa, 0xbb]) });
+  const { c } = make({ passwordExists: true, leaksCleartext: true, clearWriteUnlocks: true, password: 'Kp', program: new Uint8Array([0xaa, 0xbb]) });
   // The password store leaks without any write (LOGO!Soft reads it before clearing).
   assert.equal(await c.readByte(ADDR.PWD_MEM), 'K'.charCodeAt(0));
   assert.equal(await c.readByte(ADDR.PWD_MEM + 1), 'p'.charCodeAt(0));

@@ -138,8 +138,21 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
 //      tool distinguish "firmware holds" from "we did something wrong" ----
 
 test('contrast: a leaking (0BA5-style) device DOES yield the cleartext under the same flow', async () => {
-  const h = makeHarness({ ...ES10, leaksCleartext: true, password: 'hunter2', program: new Uint8Array(16).fill(0x5a) });
+  // A device that both leaks the password store AND honours the clear write. identNo 0x43 stores
+  // cleartext (no XOR), so "hunter2" shows as the primary reading.
+  const h = makeHarness({ ...ES10, identNo: 0x43, leaksCleartext: true, clearWriteUnlocks: true, password: 'hunter2', program: new Uint8Array(16).fill(0x5a) });
   await recoverPasswordAndUnlock(h.app);
   assert.ok(logged(h.logger, 'hunter2'));
   assert.ok(logged(h.logger, 'Read access OPEN'));
+});
+
+test('isolates firmware vs tool: password hidden, but a correct 0x4800 write DOES open the program', async () => {
+  // The behaviour we hoped for on the ES10: the password store never leaks (leaksCleartext:false),
+  // yet the clear-protection write exposes the program. The tool must still unlock and mark it open
+  // — proving that when the real ES10 stays zero, it is the FIRMWARE holding, not the tool.
+  const h = makeHarness({ ...ES10, leaksCleartext: false, clearWriteUnlocks: true, program: new Uint8Array(16).fill(0x77) });
+  await recoverPasswordAndUnlock(h.app);
+  assert.ok(logged(h.logger, 'all zero')); // the password itself was never recovered
+  assert.ok(logged(h.logger, 'Read access OPEN'));
+  assert.equal(h.store.get().unlocked, true);
 });
