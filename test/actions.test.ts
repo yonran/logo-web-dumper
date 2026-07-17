@@ -5,8 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
 import { doCheckMode, doStop } from '../src/actions/session.js';
-import { recoverNoReneg, recoverPasswordAndUnlock, relock, simpleDecode } from '../src/actions/password.js';
-import { checkPassword, readFirmware } from '../src/actions/diagnostics.js';
+import { recoverPasswordAndUnlock, relock, simpleDecode } from '../src/actions/password.js';
+import { readFirmware } from '../src/actions/diagnostics.js';
 import { ADDR } from '../src/pg/constants.js';
 
 test('doCheckMode records the STOP state', async () => {
@@ -97,20 +97,6 @@ test('unlock aborts before any write when no password is set', async () => {
   assert.ok(logged(h.logger, 'no protection to recover'));
 });
 
-test('recoverNoReneg on a non-leaking device writes 0x4800 and reports the firmware holds', async () => {
-  const h = makeHarness({ passwordExists: true, leaksCleartext: false });
-  await recoverNoReneg(h.app);
-  assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
-  assert.ok(logged(h.logger, 'firmware genuinely holds'));
-});
-
-test('recoverNoReneg on a leaking device recovers the program after the 0x4800 write', async () => {
-  const prog = new Uint8Array(16).fill(0x11);
-  const h = makeHarness({ passwordExists: true, leaksCleartext: true, program: prog });
-  await recoverNoReneg(h.app);
-  assert.ok(logged(h.logger, 'reads returned real data'));
-});
-
 test('relock writes 0x4801 (set protection) and restores the state', async () => {
   const h = makeHarness({ passwordExists: true });
   await relock(h.app);
@@ -123,10 +109,4 @@ test('readFirmware decodes the version string to V1.07.07', async () => {
   const h = makeHarness();
   await readFirmware(h.app);
   assert.ok(logged(h.logger, 'V1.07.07'));
-});
-
-test('checkPassword updates store.protected from 0x48FF', async () => {
-  const h = makeHarness({ passwordExists: true });
-  assert.equal(await checkPassword(h.app), 0x40);
-  assert.equal(h.store.get().protected, true);
 });

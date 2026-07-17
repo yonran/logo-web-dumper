@@ -69,10 +69,10 @@
       </select>
     </label>
     <button id="stop" disabled>2 &middot; Put in STOP</button>
-    <button id="unlock" disabled>3 &middot; Recover password &amp; unlock &#9888;</button>
+    <button id="unlock" disabled>3 &middot; Recover password &amp; attempt unlock &#9888;</button>
     <button id="decode" disabled>4 &middot; Read program &amp; decode</button>
     <button id="relock" disabled>5 &middot; Re-lock &#9888;</button>
-    <button id="abort" class="sec" disabled>Stop</button>
+    <button id="abort" class="sec" disabled>Abort</button>
     <span id="status" class="mut">not connected</span>
   </div>
   <p class="mut" style="font-size:12.5px;margin:8px 0 0">
@@ -98,13 +98,9 @@
       <button id="restart" class="sec" disabled>Restart (0x22)</button>
       <button id="fw" class="sec" disabled>Read firmware</button>
       <button id="nametest" class="sec" disabled>Read program name</button>
-      <button id="findmem" class="sec" disabled>Find real memory map</button>
-      <button id="probe" class="sec" disabled>Probe address space</button>
-      <button id="blockdiag" class="sec" disabled>Diagnose Read Block</button>
-      <button id="unlocknoreneg" class="sec" disabled>Unlock (no re-negotiate) &#9888;</button>
     </div>
     <div class="row">
-      <label>Start addr (hex) <input id="addr" value="00FF0EE8"></label>
+      <label>Start addr (hex) <input id="addr" value="00000EE8"></label>
       <label>Length (bytes) <input id="len" value="2000"></label>
       <button id="dump" class="sec" disabled>Dump raw region &rarr; .bin</button>
     </div>

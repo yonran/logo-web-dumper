@@ -7,15 +7,8 @@ import type { AppState } from '../state/store.js';
 import type { TransportMode } from '../transport/types.js';
 import { buttonEnablement } from './enablement.js';
 import { $, copyText, downloadText } from '../util/dom.js';
-import {
-  blockDiag,
-  dumpRegion,
-  findMemoryMap,
-  nameTest,
-  probeAddressSpace,
-  readFirmware,
-} from '../actions/diagnostics.js';
-import { recoverNoReneg, recoverPasswordAndUnlock, relock } from '../actions/password.js';
+import { dumpRegion, nameTest, readFirmware } from '../actions/diagnostics.js';
+import { recoverPasswordAndUnlock, relock } from '../actions/password.js';
 import { decodeFile, readAllAndDecode } from '../actions/program.js';
 import { doCheckMode, doConnect, doIdentify, doRestart, doStop } from '../actions/session.js';
 
@@ -53,7 +46,7 @@ export function wireUi(app: App): void {
     });
     // The Stop button only exists to interrupt a running operation: enabled only while busy.
     abortBtn.disabled = !busy;
-    if (!busy) abortBtn.textContent = 'Stop';
+    if (!busy) abortBtn.textContent = 'Abort';
     document.querySelectorAll('button').forEach((b) => b.classList.toggle('next', b.id === next && !b.disabled));
   }
   app.store.subscribe(render);
@@ -71,7 +64,7 @@ export function wireUi(app: App): void {
         if (!ALWAYS_ON.includes(b.id)) b.disabled = true;
       });
       abortBtn.disabled = false;
-      abortBtn.textContent = 'Stop ' + label; // say what it's stopping
+      abortBtn.textContent = 'Abort ' + label; // say what it's stopping
       try {
         await fn(app);
       } catch (e) {
@@ -146,15 +139,11 @@ export function wireUi(app: App): void {
   on('stop', doStop, 'STOP command');
   on('fw', readFirmware, 'firmware read');
   on('nametest', nameTest, 'name read');
-  on('findmem', findMemoryMap, 'memory probe');
-  on('probe', probeAddressSpace, 'address probe');
-  on('blockdiag', blockDiag, 'block diagnostic');
   on('dump', dumpRegion, 'dump');
   on('decode', readAllAndDecode, 'program read');
 
   // ---- writes (armed) ----
   armWrite('unlock', recoverPasswordAndUnlock, 'unlock');
-  armWrite('unlocknoreneg', recoverNoReneg, 'unlock');
   armWrite('relock', relock, 're-lock');
 
   // ---- abort ---- (only meaningful while an operation is running)

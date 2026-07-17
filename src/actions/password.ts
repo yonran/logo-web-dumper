@@ -118,50 +118,6 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   }
 }
 
-/**
- * Diagnostic variant: same corrected clear write (0x00FF4800), no verify prompt, no re-negotiate.
- * Kept as an automated one-shot for quick retesting.
- */
-export async function recoverNoReneg(app: App): Promise<void> {
-  app.log('— EXPERIMENT: write 0x00FF4800=0 (LSC clear-protection register) then read 0x0566/program in the SAME session. —', 'mut');
-  const conn = await ensureStopped(app);
-  if (!conn) return;
-  const exists = await conn.readByte(ADDR.PWD_EXISTS);
-  app.store.set({ protected: isPasswordSet(exists) });
-  if (!isPasswordSet(exists)) {
-    app.log('Password byte @48FF = 0x' + exists.toString(16) + ' — no protection to recover.', 'ok');
-    return;
-  }
-  const g1 = await conn.readByte(ADDR.PWD_MAGIC1);
-  const g2 = await conn.readByte(ADDR.PWD_MAGIC2);
-  if (g1 !== 0x04 || g2 !== 0x00) {
-    app.log('Magic bytes unexpected (0x' + g1.toString(16) + '/0x' + g2.toString(16) + '); aborting BEFORE any write.', 'err');
-    return;
-  }
-  app.log('Writing 0x00FF4800=0x00 and reading 0x00FF0566/program back-to-back — no restart in between.', 'mut');
-  await conn.writeByte(ADDR.PL_CLEAR, 0x00);
-  app.store.set({ protected: true });
-  let opened = false;
-  try {
-    const pw = await conn.readRegion(ADDR.PWD_MEM, 10, 'password area (no-reneg)');
-    const pwnz = [...pw].some((b) => b);
-    app.log('Password area @0x00FF0566 (same session): ' + (pwnz ? '"' + passwordString(pw) + '"  raw ' + hex(pw) : 'still all zero'), pwnz ? 'ok' : 'err');
-    app.log('Reading program area 0x00FF0EE8 in the same session…', 'mut');
-    const test = await conn.readRegion(ADDR.PROGRAM, 16, 'program probe (no-reneg)');
-    let nz = 0;
-    for (const d of test) if (d) nz++;
-    if (pwnz || nz > 0) {
-      opened = true;
-      app.log('RESULT: reads returned real data (' + nz + '/16 program bytes non-zero: ' + hex(test) + '). Use step 4 to dump.', 'ok');
-    } else {
-      app.log('RESULT: still all zero after writing 0x00FF4800 — this firmware genuinely holds read protection.', 'err');
-    }
-  } finally {
-    app.store.set({ unlocked: opened });
-    app.log('⚠️ A protection-clear write was sent (0x00FF4800 = 0). Press “5 · Re-lock” to restore protection when done.', 'err');
-  }
-}
-
 /** Restore protection: write 0 to 0x00FF4801 (LSC ADR_SET_PASSWORD_ACTIVE). Password untouched. */
 export async function relock(app: App): Promise<void> {
   const conn = await ensureStopped(app, 'Needs STOP mode.');

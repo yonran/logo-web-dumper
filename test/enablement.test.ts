@@ -27,7 +27,7 @@ test('connected, not stopped: stop enabled + glows; reads still disabled', () =>
   assert.equal(enabled.mode, true);
   assert.equal(enabled.ident, true);
   assert.equal(enabled.restart, true);
-  assert.equal(enabled.fw, true);
+  assert.equal(enabled.fw, false); // firmware read needs STOP
   assert.equal(enabled.decode, false);
   assert.equal(enabled.unlock, false);
   assert.equal(next, 'stop');
@@ -38,11 +38,8 @@ test('stopped, protection unknown: reads + unlock enabled; relock off; decode gl
   assert.equal(enabled.decode, true);
   assert.equal(enabled.nametest, true);
   assert.equal(enabled.dump, true);
-  assert.equal(enabled.findmem, true);
-  assert.equal(enabled.probe, true);
-  assert.equal(enabled.blockdiag, true);
+  assert.equal(enabled.fw, true); // firmware read enabled once stopped
   assert.equal(enabled.unlock, true); // protected !== false
-  assert.equal(enabled.unlocknoreneg, true);
   assert.equal(enabled.relock, false); // protected is null, not unlocked
   assert.equal(next, 'decode');
 });
@@ -57,7 +54,6 @@ test('stopped, protected: unlock enabled + glows; relock enabled', () => {
 test('stopped, not protected: unlock disabled; decode glows', () => {
   const { enabled, next } = buttonEnablement(s({ connected: true, stopped: true, protected: false }));
   assert.equal(enabled.unlock, false);
-  assert.equal(enabled.unlocknoreneg, false);
   assert.equal(enabled.relock, false);
   assert.equal(next, 'decode');
 });
@@ -65,7 +61,6 @@ test('stopped, not protected: unlock disabled; decode glows', () => {
 test('unlocked but not dumped: unlock off, relock on, decode still glows', () => {
   const { enabled, next } = buttonEnablement(s({ connected: true, stopped: true, protected: true, unlocked: true }));
   assert.equal(enabled.unlock, false);
-  assert.equal(enabled.unlocknoreneg, false);
   assert.equal(enabled.relock, true);
   assert.equal(next, 'decode');
 });

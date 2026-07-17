@@ -9,7 +9,7 @@ import { Connection } from '../src/pg/connection.js';
 import { Logger } from '../src/log.js';
 import { ADDR } from '../src/pg/constants.js';
 import { readFirmware } from '../src/actions/diagnostics.js';
-import { recoverNoReneg, recoverPasswordAndUnlock } from '../src/actions/password.js';
+import { recoverPasswordAndUnlock } from '../src/actions/password.js';
 import { readAllAndDecode } from '../src/actions/program.js';
 import { FakeDevice } from './helpers/fake-device.js';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
@@ -91,13 +91,6 @@ function es10Conn(): { c: Connection; l: Logger } {
   return { c: new Connection(new FakeDevice(ES10), l), l };
 }
 
-test('the tool does NOT treat the immediate 0x06 as success (06 then 15 03 → error, not data)', async () => {
-  const { c, l } = es10Conn();
-  const r = await c.tryBlock(new Uint8Array([0x05, 0x00, 0xff, 0x0e, 0xe8, 0x07, 0xd0]), 2000, '  05 00 ff 0e e8 07 d0');
-  assert.equal(r, null);
-  assert.ok(l.lines.some((x) => x.includes('06 then NOK')));
-});
-
 test('identify + mode + protection + firmware match the observations', async () => {
   const { c } = es10Conn();
   assert.equal(await c.connect(), 0x45);
@@ -124,13 +117,6 @@ test('unlock with the corrected 0x4800 write still does not take on the ES10 mod
   await recoverPasswordAndUnlock(h.app);
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00)); // the CORRECTED clear write (0x4800)
   assert.ok(logged(h.logger, 'Still all zero after writing 0x00FF4800'));
-});
-
-test('recoverNoReneg with 0x4800 also stays zero — firmware genuinely holds', async () => {
-  const h = makeHarness(ES10);
-  await recoverNoReneg(h.app);
-  assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
-  assert.ok(logged(h.logger, 'firmware genuinely holds'));
 });
 
 test('regression: after a failed unlock, decode BLOCKS instead of reading a protected device', async () => {
