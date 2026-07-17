@@ -100,11 +100,21 @@ export class Connection {
     return ok;
   }
 
-  /** After an exception the 0BA6 needs 22 then 21 before it will answer again. */
+  /**
+   * Re-establish the session after an exception: Restart (0x22), then the device-appropriate
+   * handshake. The 0BA6 answers the 0x21 connect request; the 0BA5 does NOT (0x21 gets no reply)
+   * and is re-probed with the 2-byte Read Byte at the ident register 0x1F02, exactly as connect()
+   * detects it. Using 0x21 on a 0BA5 would leave the device un-handshaken and desync the stream.
+   */
   async recover(): Promise<void> {
     await this.restart(true);
-    await this.xport.write(new Uint8Array([OP.CONNECT]));
-    await this.xport.read(4, 800);
+    if (this.device.addrWidth === 4) {
+      await this.xport.write(new Uint8Array([OP.CONNECT]));
+      await this.xport.read(4, 800);
+    } else {
+      await this.xport.write(new Uint8Array([OP.READ_BYTE, 0x1f, 0x02]));
+      await this.xport.read(5, 800);
+    }
     await this.xport.read(4096, 40);
   }
 

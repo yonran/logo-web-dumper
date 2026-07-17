@@ -60,6 +60,12 @@ export function wireUi(app: App): void {
       }
       busy = true;
       busyLabel = label;
+      // Clear any abort left set by a previous operation's Stop click, at the operation boundary.
+      // ensureStopped() already clears it for the long-read ops, but the session ops (doStop,
+      // doCheckMode, doIdentify, doRestart) bypass ensureStopped — without this reset a Stop during
+      // a program read would leave abort=true so the next Check-mode's first transient glitch is
+      // treated as fatal instead of retried.
+      if (app.conn) app.conn.abort = false;
       document.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
         if (!ALWAYS_ON.includes(b.id)) b.disabled = true;
       });
