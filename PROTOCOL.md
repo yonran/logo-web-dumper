@@ -59,7 +59,7 @@ IdentNo values:
 | `0x44` | 0BA6.ES3 | 4 bytes |
 | `0x45` | 0BA6.ES10 | 4 bytes |
 
-(0BA4/0BA5 don't answer the `0x21` request; they're probed with `02 1F 02` instead. This tool targets 0BA6.)
+**0BA5 vs 0BA6 detection (both supported).** 0BA5 does **not** answer the `0x21` request, so the tool falls back to a 2-byte Read Byte at the ident register `0x1F02` (`02 1F 02` → `06 03 1F 02 <ident>`); IdentNo `0x42` ⇒ 0BA5. Once detected, the two devices differ only in **address width** (0BA6 = 4 bytes, 0BA5 = 2 bytes) and the `0xFF` page (0BA6 pages addresses ≥ 0x1F00; 0BA5 has no page). The 0BA5 wire address is just the low 16 bits of the 0BA6-canonical address, so the same constants serve both. *(0BA5 path is implemented but unverified on real 0BA5 hardware.)*
 
 Source: brickpool/logo `src/LogoPG.cpp` — `LOGO6_CR = {0x21}`, `LogoConnect()`, and the IdentNo switch in `NegotiatePduParameters()`.
 

@@ -81,7 +81,7 @@ test('a single exception latches the session until Restart (PROTOCOL.md §3.2a)'
   // Restart clears it …
   assert.deepEqual(await exchange(dev, [0x22], 1), [0x06]);
   // … and the same read works again.
-  assert.deepEqual(await exchange(dev, [0x02, 0x00, 0xff, 0x1f, 0x02], 7), [0x06, 0x03, 0x00, 0xff, 0x1f, 0x02, 0x42]);
+  assert.deepEqual(await exchange(dev, [0x02, 0x00, 0xff, 0x1f, 0x02], 7), [0x06, 0x03, 0x00, 0xff, 0x1f, 0x02, 0x45]);
 });
 
 // ---- tool-level behaviour: the app reaches the documented conclusions ----

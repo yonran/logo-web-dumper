@@ -7,6 +7,7 @@ import type { Logger } from '../log.js';
 import type { Transport } from '../transport/types.js';
 import { addr8, hex } from '../util/hex.js';
 import { cpuErrText, IDENT_NAMES, MODES, MODE_STOP, OP } from './constants.js';
+import { addrBytes as encodeAddr, ba6, BA5, profileForIdent, wireAddr, type DeviceProfile } from './device.js';
 
 /** A read/write rejected by the device. `nok` is the CPU exception code, when known. */
 export class PgError extends Error {
@@ -31,6 +32,9 @@ export class Connection {
   /** Set by the Stop button to interrupt a long region read / probe. */
   abort = false;
 
+  /** Addressing profile — set by connect(). Defaults to 0BA6.ES10. */
+  private device: DeviceProfile = ba6(0x45);
+
   constructor(
     private readonly xport: Transport,
     private readonly logger: Logger,
@@ -40,31 +44,52 @@ export class Connection {
     return this.xport.kind;
   }
 
+  get deviceName(): string {
+    return this.device.name;
+  }
+
   async close(): Promise<void> {
     await this.xport.close();
   }
 
-  private static addrBytes(addr: number): number[] {
-    return [(addr >>> 24) & 0xff, (addr >>> 16) & 0xff, (addr >>> 8) & 0xff, addr & 0xff];
+  /** Encode an address as its wire bytes for the current device (4-byte on 0BA6, 2-byte on 0BA5). */
+  private addrBytes(addr: number): number[] {
+    return encodeAddr(this.device, addr);
   }
 
-  /** Connect request `0x21` → `06 55 <..> <IdentNo>`. Returns the IdentNo. */
+  /**
+   * Connect + auto-detect the device. 0BA6 answers the `0x21` request (`06 03 21 <ident>`); 0BA5
+   * does not, and is probed instead with a 2-byte Read Byte at the ident register `0x1F02`.
+   * Sets `this.device` (address width) and returns the IdentNo.
+   */
   async connect(): Promise<number> {
     const stale = await this.xport.read(4096, 80); // drain
     if (stale.length) this.logger.log('drained ' + stale.length + ' stale byte(s) before connect: ' + hex(stale), 'mut');
     await this.xport.write(new Uint8Array([OP.CONNECT]));
     const r = await this.xport.read(4, 1500);
-    this.logger.log('→ 21    ← ' + (r.length ? hex(r) : '(nothing)'), r.length ? null : 'err');
-    if (r.length < 4 || r[0] !== OP.ACK) {
-      throw new Error(
-        'No 0BA6 ack. Got: ' + hex(r) + '. Is it in STOP and cabled? Genuine cable may need RTS/DTR high.',
-      );
+    this.logger.log('→ 21    ← ' + (r.length ? hex(r) : '(nothing)'), r.length ? null : 'mut');
+    if (r.length >= 4 && r[0] === OP.ACK) {
+      await this.drain('connect', 120);
+      const ident = r[3];
+      this.device = profileForIdent(ident) ?? ba6(ident);
+      this.logger.log('Connected. IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, ident >= 0x43 && ident <= 0x45 ? 'ok' : 'err');
+      return ident;
     }
-    await this.drain('connect', 120);
-    const ident = r[3];
-    const name = IDENT_NAMES[ident] ?? '0x' + ident.toString(16);
-    this.logger.log('Connected. IdentNo=0x' + ident.toString(16) + ' → ' + name, ident >= 0x43 && ident <= 0x45 ? 'ok' : 'err');
-    return ident;
+    // No 0x21 answer — try the 0BA5 (2-byte) probe: Read Byte at 0x1F02 (the ident register).
+    this.logger.log('No 0x21 answer — probing for a 0BA5 (2-byte addressing) at 0x1F02…', 'mut');
+    this.device = BA5;
+    await this.xport.read(4096, 80);
+    await this.xport.write(new Uint8Array([OP.READ_BYTE, 0x1f, 0x02]));
+    const p = await this.xport.read(5, 1500); // 06 03 1F 02 <ident>
+    this.logger.log('→ 02 1f 02   ← ' + (p.length ? hex(p) : '(nothing)'), p.length ? null : 'err');
+    if (p.length >= 5 && p[0] === OP.ACK && p[1] === 0x03) {
+      await this.drain('connect (0BA5)', 120);
+      const ident = p[4];
+      this.device = ident === 0x42 ? BA5 : { identNo: ident, name: IDENT_NAMES[ident] ?? '0x' + ident.toString(16), addrWidth: 2 };
+      this.logger.log('Connected. 0BA5-style device, IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, 'ok');
+      return ident;
+    }
+    throw new Error('No device ack (neither 0BA6 0x21 nor 0BA5 0x1F02 probe). Got: ' + hex(r) + ' / ' + hex(p) + '. Is it in STOP and cabled?');
   }
 
   /**
@@ -101,7 +126,7 @@ export class Connection {
    * makes it self-validating. Throws PgError on NOK.
    */
   async readByte(addr: number, quiet = false): Promise<number> {
-    const cmd = new Uint8Array([OP.READ_BYTE, ...Connection.addrBytes(addr)]);
+    const cmd = new Uint8Array([OP.READ_BYTE, ...this.addrBytes(addr)]);
     const A = addr8(addr);
     await this.xport.write(cmd);
     const t0 = await this.xport.read(1, 1500);
@@ -129,21 +154,25 @@ export class Connection {
       await this.drain('after unexpected');
       throw new Error('Read Byte ' + A + ': expected 0x06/0x15, got 0x' + t0[0].toString(16));
     }
-    const rest = await this.xport.read(6, 1500); // 03 + 4 addr echo + 1 data
-    if (rest.length < 6) {
+    // Response: 03 + <addrWidth> addr echo + 1 data. Width is 4 on 0BA6, 2 on 0BA5.
+    const w = this.device.addrWidth;
+    const rest = await this.xport.read(2 + w, 1500);
+    if (rest.length < 2 + w) {
       await this.drain('short');
       throw new Error('Read Byte ' + A + ': short response (' + hex(rest) + ')');
     }
     if (!quiet) this.logger.log('→ ' + hex(cmd) + '   ← 06 ' + hex(rest), 'mut');
     if (rest[0] !== 0x03) throw new Error('Read Byte ' + A + ': expected data code 0x03, got 0x' + rest[0].toString(16));
-    const echo = (rest[1] << 24 >>> 0) + (rest[2] << 16) + (rest[3] << 8) + rest[4];
-    if (echo !== addr) this.logger.log('  address echo MISMATCH: sent ' + A + ', echoed ' + addr8(echo), 'err');
-    return rest[5];
+    let echo = 0;
+    for (let i = 0; i < w; i++) echo = (echo << 8) | rest[1 + i];
+    echo >>>= 0;
+    if (echo !== wireAddr(this.device, addr)) this.logger.log('  address echo MISMATCH: sent ' + A + ', echoed 0x' + echo.toString(16), 'err');
+    return rest[1 + w];
   }
 
   /** Write Byte `0x01`. Response is a bare `0x06` (or `15 <code>`). Throws on NOK / no ACK. */
   async writeByte(addr: number, data: number): Promise<void> {
-    const cmd = new Uint8Array([OP.WRITE_BYTE, ...Connection.addrBytes(addr), data & 0xff]);
+    const cmd = new Uint8Array([OP.WRITE_BYTE, ...this.addrBytes(addr), data & 0xff]);
     const A = addr8(addr);
     await this.xport.read(4096, 40);
     await this.xport.write(cmd);
@@ -303,7 +332,7 @@ export class Connection {
     this.logger.log('Probing ' + pages + ' pages with Read Block ×' + n + ' — unlike Read Byte, this FAULTS on unmapped memory.', 'mut');
     for (let i = 0; i < pages && !this.abort; i++) {
       const addr = (base + i * stride) >>> 0;
-      const cmd = new Uint8Array([OP.READ_BLOCK, ...Connection.addrBytes(addr), (n >> 8) & 0xff, n & 0xff]);
+      const cmd = new Uint8Array([OP.READ_BLOCK, ...this.addrBytes(addr), (n >> 8) & 0xff, n & 0xff]);
       await this.xport.read(4096, 40);
       await this.xport.write(cmd);
       const t0 = await this.xport.read(1, 1500);

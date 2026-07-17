@@ -1,6 +1,6 @@
 # LOGO! Web Dumper
 
-Read and decode the circuit program from a **Siemens LOGO! 0BA6** small PLC — entirely in your browser, no install, no Siemens software.
+Read and decode the circuit program from a **Siemens LOGO! 0BA5 / 0BA6** small PLC — entirely in your browser, no install, no Siemens software. (The device is auto-detected on connect; the 0BA5 path is implemented but so far only verified against the emulator, not real 0BA5 hardware.)
 
 **Live tool: https://yonran.github.io/logo-web-dumper/**
 
