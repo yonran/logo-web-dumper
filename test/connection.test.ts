@@ -67,10 +67,10 @@ test('leaking device: password store reads directly; program needs the 0x4800 cl
   assert.equal(await c.readByte(ADDR.PWD_MEM), 'K'.charCodeAt(0));
   assert.equal(await c.readByte(ADDR.PWD_MEM + 1), 'p'.charCodeAt(0));
   // The program is still protected until the clear write.
-  assert.equal(await c.readByte(ADDR.PROGRAM), 0x00);
+  assert.equal(await c.readByte(c.mem.programBase), 0x00);
   await c.writeByte(ADDR.PL_CLEAR, 0x00); // clear protection (0x4800)
-  assert.equal(await c.readByte(ADDR.PROGRAM), 0xaa);
-  assert.equal(await c.readByte(ADDR.PROGRAM + 1), 0xbb);
+  assert.equal(await c.readByte(c.mem.programBase), 0xaa);
+  assert.equal(await c.readByte(c.mem.programBase + 1), 0xbb);
 });
 
 test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () => {
@@ -79,21 +79,25 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('program/password are read at the BARE addresses (0x0000____), not the 0x00FF____ page', async () => {
-  // The fake responds only at the hardware-verified addresses (bare below 0x1F00). If the tool's
-  // ADDR.PROGRAM / ADDR.PWD_MEM regressed to 0x00FF____, these reads would return zeros.
+test('0BA6 map on the wire: password bare 0x00000566, program paged 0x00FF3292', async () => {
+  // The fake stores the password at bare 0x0566 (< 0x1F00) and the 0BA6 program at 0x3292
+  // (≥ 0x1F00 → paged). If the tool regressed to the 0BA4 program (bare 0x0EE8) these would be zero.
   const { c, d } = make({ passwordExists: false, password: 'ok', program: new Uint8Array([0xde, 0xad]) });
-  assert.deepEqual([...(await c.readRegion(ADDR.PROGRAM, 2, 'p'))], [0xde, 0xad]);
+  assert.deepEqual([...(await c.readRegion(c.mem.programBase, 2, 'p'))], [0xde, 0xad]);
   assert.equal(await c.readByte(ADDR.PWD_MEM), 'o'.charCodeAt(0));
-  // and the address bytes actually put on the wire are bare:
-  const progRead = d.writes.find((w) => w[0] === 0x02 && w[4] === 0xe8);
+  // The program read goes out as the PAGED 4-byte address 00 ff 32 92:
+  const progRead = d.writes.find((w) => w[0] === 0x02 && w[2] === 0xff && w[3] === 0x32 && w[4] === 0x92);
   assert.ok(progRead);
-  assert.deepEqual([...progRead.slice(1, 5)], [0x00, 0x00, 0x0e, 0xe8]);
+  assert.deepEqual([...progRead.slice(1, 5)], [0x00, 0xff, 0x32, 0x92]);
+  // The password read is bare:
+  const pwdRead = d.writes.find((w) => w[0] === 0x02 && w[3] === 0x05 && w[4] === 0x66);
+  assert.ok(pwdRead);
+  assert.deepEqual([...pwdRead.slice(1, 5)], [0x00, 0x00, 0x05, 0x66]);
 });
 
 test('readRegion reads a run of bytes via Read Byte', async () => {
   const prog = new Uint8Array([0x10, 0x20, 0x30, 0x40]);
   const { c } = make({ program: prog }); // no password → readable
-  const data = await c.readRegion(ADDR.PROGRAM, 4, 'prog');
+  const data = await c.readRegion(c.mem.programBase, 4, 'prog');
   assert.deepEqual([...data], [0x10, 0x20, 0x30, 0x40]);
 });

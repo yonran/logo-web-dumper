@@ -6,8 +6,8 @@
 import type { Logger } from '../log.js';
 import type { Transport } from '../transport/types.js';
 import { addr8, hex } from '../util/hex.js';
-import { cpuErrText, IDENT_NAMES, isStopMode, MODES, OP } from './constants.js';
-import { addrBytes as encodeAddr, ba6, BA5, profileForIdent, wireAddr, type DeviceProfile } from './device.js';
+import { cpuErrText, isStopMode, MODES, OP } from './constants.js';
+import { addrBytes as encodeAddr, ba5Like, ba6, BA5, profileForIdent, wireAddr, type DeviceProfile, type ProgramMap } from './device.js';
 
 /** A read/write rejected by the device. `nok` is the CPU exception code, when known. */
 export class PgError extends Error {
@@ -47,6 +47,11 @@ export class Connection {
     return this.device.identNo;
   }
 
+  /** Program memory map (region addresses + decode strategy) for the detected device. */
+  get mem(): ProgramMap {
+    return this.device.mem;
+  }
+
   async close(): Promise<void> {
     await this.xport.close();
   }
@@ -84,7 +89,7 @@ export class Connection {
     if (p.length >= 5 && p[0] === OP.ACK && p[1] === 0x03) {
       await this.drain('connect (0BA5)', 120);
       const ident = p[4];
-      this.device = ident === 0x42 ? BA5 : { identNo: ident, name: IDENT_NAMES[ident] ?? '0x' + ident.toString(16), addrWidth: 2 };
+      this.device = ident === 0x42 ? BA5 : ba5Like(ident);
       this.logger.log('Connected. 0BA5-style device, IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, 'ok');
       return ident;
     }

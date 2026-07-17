@@ -3,7 +3,6 @@
 import type { App } from '../app.js';
 import { ADDR } from '../pg/constants.js';
 import { ascii } from '../util/hex.js';
-import { downloadBytes } from '../util/dom.js';
 import { deviceSlug, ensureStopped } from './common.js';
 
 /** Firmware read: proves single-byte reads work at all, independent of Read Block. */
@@ -53,6 +52,6 @@ export async function dumpRegion(app: App): Promise<void> {
     app.log('Region is entirely 0x00 — protected/unmapped/empty. Nothing saved. (Unlock via step 3 if the program is protected.)', 'err');
     return;
   }
-  downloadBytes('logo_' + deviceSlug(conn.deviceName) + '_' + addrStr + '_' + len + '.bin', data);
+  app.ui.download('logo_' + deviceSlug(conn.deviceName) + '_' + addrStr + '_' + len + '.bin', data);
   app.log('Saved ' + data.length + ' bytes (' + nz + ' non-zero).', 'ok');
 }

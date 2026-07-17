@@ -6,7 +6,7 @@
 
 import type { App } from '../app.js';
 import { ADDR, isPasswordSet } from '../pg/constants.js';
-import { ascii, hex } from '../util/hex.js';
+import { addr8, ascii, hex } from '../util/hex.js';
 import { ensureStopped } from './common.js';
 
 /** Cleartext string from the 10-byte password area, stopping at the first zero (as LSC does). */
@@ -112,12 +112,12 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
     const pw2nz = [...pw2].some((b) => b);
     app.log('Password area @0x00000566 (after clear): ' + (pw2nz ? '"' + passwordString(pw2) + '"  raw ' + hex(pw2) : 'still all zero'), pw2nz ? 'ok' : 'err');
     app.log('Verifying read access to the program area…', 'mut');
-    const test = await conn.readRegion(ADDR.PROGRAM, 16, 'program probe');
+    const test = await conn.readRegion(conn.mem.programBase, 16, 'program probe');
     let nz = 0;
     for (const d of test) if (d) nz++;
     if (nz > 0 || pw2nz) {
       opened = true;
-      app.log('Read access OPEN — 0x00000EE8 returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & decode”.', 'ok');
+      app.log('Read access OPEN — ' + addr8(conn.mem.programBase) + ' returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & decode”.', 'ok');
     } else {
       app.log('Still all zero after writing 0x00FF4800 = 0 — the corrected clear register did not open reads either.', 'err');
       app.log('This is the FIRST time the register LOGO!Soft actually uses (0x4800) was tried on this device. If it still holds, the 0BA6.ES10 (fw V1.07.07) genuinely enforces read protection. Options: power-cycle then retry; otherwise the program may only be recoverable from an original .lsc source.', 'mut');

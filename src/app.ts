@@ -14,6 +14,8 @@ export interface Ui {
   setStatus(text: string, cls: LogClass): void;
   /** Show an OK/Cancel prompt; returns true on OK. Used to verify the recovered password. */
   confirm(message: string): boolean;
+  /** Offer a byte blob to the user as a file download (a DOM action, kept off the action layer). */
+  download(filename: string, bytes: Uint8Array): void;
 }
 
 export class App {

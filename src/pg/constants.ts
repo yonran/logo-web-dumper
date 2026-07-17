@@ -24,7 +24,8 @@ export const ADDR = {
   // only ORs 0xFF0000 onto addresses ≥ 0x1F00; anything below stays a bare 16-bit value, sent as
   // a 4-byte address 0x0000____. Our old 0x00FF0566 / 0x00FF0EE8 were wrong (they read zeros
   // while the ≥0x1F00 system registers worked), which is why every program/password read failed.
-  PWD_MEM: 0x00000566, // 10-byte password store
+  PWD_MEM: 0x00000566, // 10-byte password store (bare; shared across families via getAdress)
+  PROG_NAME: 0x00000570, // 16-byte ASCII program name (bare, < 0x1F00; shared)
   // Protection registers, VERIFIED by decompiling LOGO!Soft Comfort V8.0
   // (DE.siemens.ad.logo.model.hardware.Modular0.getAdress + clearPasswordOnLogo/set method).
   // LSC clears protection by writing 0 to 0x4800 and re-sets it by writing 0 to 0x4801.
@@ -35,10 +36,8 @@ export const ADDR = {
   // reference; 0x4740 is what this tool used to write and it never took on the 0BA6.ES10.
   PL_LEVEL1: 0x00ff4740, // brickpool "level 1 (no protection)" — NOT what LSC writes
   PL_LEVEL3: 0x00ff4100, // brickpool "level 3 (read/write protection)"
-  PROG_NAME: 0x00000570, // 16-byte ASCII program name (bare, < 0x1F00)
-  PTR_TABLE: 0x00000c14, // 260-byte pointer table (bare)
-  OUT_WIRING: 0x00000e20, // 200-byte output/marker wiring (bare)
-  PROGRAM: 0x00000ee8, // 2000-byte program memory (bare)
+  // The program/pointer/wiring addresses are NOT here — they differ per device family and live in
+  // the DeviceProfile's ProgramMap (see device.ts). 0BA4/0BA5 use a low bare map; 0BA6 a high paged one.
 } as const;
 
 export const PWD_EXISTS_YES = 0x40;

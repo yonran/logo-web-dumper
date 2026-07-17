@@ -3,7 +3,7 @@
 import { App, type Ui } from './app.js';
 import { Logger } from './log.js';
 import { Store } from './state/store.js';
-import { $ } from './util/dom.js';
+import { $, downloadBytes } from './util/dom.js';
 import { wireUi } from './ui/controller.js';
 
 const logger = new Logger();
@@ -20,6 +20,7 @@ const ui: Ui = {
     el.className = cls ?? 'mut';
   },
   confirm: (m) => window.confirm(m),
+  download: (filename, bytes) => downloadBytes(filename, bytes),
 };
 
 const app = new App(store, logger, ui);

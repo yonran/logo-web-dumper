@@ -17,6 +17,8 @@ export class FakeUi implements Ui {
   confirmReturn = true;
   /** Messages passed to confirm(), for assertions. */
   readonly confirmMessages: string[] = [];
+  /** Files offered via download(), for assertions. */
+  readonly downloads: { name: string; bytes: Uint8Array }[] = [];
 
   input(id: string): string {
     return this.inputs[id] ?? '';
@@ -31,6 +33,9 @@ export class FakeUi implements Ui {
   confirm(message: string): boolean {
     this.confirmMessages.push(message);
     return this.confirmReturn;
+  }
+  download(name: string, bytes: Uint8Array): void {
+    this.downloads.push({ name, bytes });
   }
 }
 

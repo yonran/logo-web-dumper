@@ -32,7 +32,7 @@ test('0BA5 reads the program at the bare 2-byte 0x0EE8', async () => {
   const d = new FakeDevice({ identNo: 0x42, program: new Uint8Array([0xaa, 0xbb]) });
   const c = new Connection(d, new Logger());
   await c.connect();
-  const data = await c.readRegion(ADDR.PROGRAM, 2, 'p'); // 0x00000EE8 → 0BA5 wire 0x0EE8
+  const data = await c.readRegion(c.mem.programBase, 2, 'p'); // 0BA5 map: 0x00000EE8 → 2-byte wire 0x0EE8
   assert.deepEqual([...data], [0xaa, 0xbb]);
   const readCmd = d.writes.find((w) => w[0] === 0x02 && w[1] === 0x0e);
   assert.ok(readCmd);

@@ -11,7 +11,8 @@ import type { Transport } from '../../src/transport/types.js';
 // the fake catches a wrong address. The wire address per device follows LSC's rule (see wire()).
 const BASE = {
   PWD_MEM: 0x0566,
-  PROGRAM: 0x0ee8,
+  PROGRAM_LEGACY: 0x0ee8, // 0BA4/0BA5 program body (bare, < 0x1F00)
+  PROGRAM_0BA6: 0x3292, // 0BA6 program body (LSC Logo6 map; ≥ 0x1F00 → paged to 0x00FF3292)
   PWD_EXISTS: 0x48ff,
   PWD_MAGIC1: 0x1f00,
   PWD_MAGIC2: 0x1f01,
@@ -88,8 +89,11 @@ export class FakeDevice implements Transport {
       this.pwdMem.set(this.wire(BASE.PWD_MEM + i), b);
     }
     // Program memory: protected until the clear write drops protection (on a leaking device).
+    // The body lives at the device family's program base — 0x3292 on 0BA6, 0x0EE8 on 0BA4/0BA5 —
+    // so a tool that reads the wrong family's map gets nothing back.
+    const progBase = this.addrWidth === 4 ? BASE.PROGRAM_0BA6 : BASE.PROGRAM_LEGACY;
     const prog = config.program ?? new Uint8Array(0);
-    for (let i = 0; i < prog.length; i++) this.progMem.set(this.wire(BASE.PROGRAM + i), prog[i]);
+    for (let i = 0; i < prog.length; i++) this.progMem.set(this.wire(progBase + i), prog[i]);
   }
 
   /** Wire address for this device: bare 16-bit on 0BA5; on 0BA6 the ≥0x1F00 page (LSC getAdress). */

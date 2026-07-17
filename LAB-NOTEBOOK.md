@@ -27,6 +27,27 @@ Convention: `→` = PC→LOGO, `←` = LOGO→PC. All addresses 4-byte big-endia
   So an all-zero read is ambiguous: it means *either* "protected" *or* "unmapped/wrong
   address" — the two cannot be told apart by the value alone.
 
+### 2026-07-17 — UNLOCK WORKS; password recovered; program is at the 0BA6 (not 0BA4) map
+
+- **The unlock takes on real hardware.** With the corrected clear register (`0x00FF4800 = 0`)
+  and bare password address, the password store at bare `0x00000566` returned
+  `dd c5 df c6 d8 c9 d8 00 00 00`, which XOR-decodes ("protect customer" ^ 0xFF) to **`RHOMBUS`**.
+  After the clear write, reads changed from `0x00` to non-`0x00` — protection genuinely lowered.
+  Re-lock (`0x00FF4801 = 0`) restored `0x48FF = 0x40`. The earlier "firmware holds" conclusion was
+  an artifact of wrong addresses.
+- **But the whole 2460-byte program dump was `0xFF`.** Cause: `0x0C14`/`0x0E20`/`0x0EE8` are LSC's
+  **`Logo4` (0BA4)** map. The DUT is a 0BA6 (`Logo6`; ES10 = `Logo6Update2`, getID `0x45`, which
+  does NOT override `getMemories`). The correct **0BA6** map (from `Logo6.getMemories`; getAdress
+  ORs `0xFF0000` for addr ≥ `0x1F00`):
+  - Program-offset table `0x2FAA` → wire `0x00FF2FAA`
+  - Anchors (Q/M/AM wiring) `0x31CA` → wire `0x00FF31CA`
+  - **Program `0x3292` → wire `0x00FF3292`**; total image `getNumberOfUploadTransferBytes` = **13464 bytes**
+  - Low block-name tables stay bare: BlocknamenTabelle `0x0688`, Blocknamen `0x0708`, Message RTF `0x0AA8`
+- **Tool change:** the program map is now per-device in `DeviceProfile.mem` (0BA4/0BA5 legacy low
+  map vs 0BA6 high paged map). "Read program & decode" reads the whole 13464-byte image contiguously
+  from `0x00FF2FAA` and saves it raw (no 0BA6 netlist decoder yet). Next: capture that image on
+  hardware and reverse the 0BA6 offset-table/block format.
+
 ---
 
 ## Open question: how would the protocol let you ENTER a known password?
