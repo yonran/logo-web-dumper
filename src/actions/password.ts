@@ -55,38 +55,48 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   }
   // Read the stored password FIRST, before any write — this is the order LOGO!Soft uses
   // (uploadPassword runs before clearPasswordOnLogo). On a leaking device this returns the real
-  // cleartext; on the 0BA6.ES10 it returns zeros because the firmware doesn't leak it.
-  app.log('Reading the stored password from 0x00FF0566 (as LOGO!Soft does, before any write)…', 'mut');
+  // password bytes; on the 0BA6.ES10 it returns zeros because the firmware doesn't leak it.
+  app.log('Reading the stored password from 0x00000566 (as LOGO!Soft does, before any write)…', 'mut');
   const pw = await conn.readRegion(ADDR.PWD_MEM, 10, 'password area');
   const pwnz = [...pw].some((b) => b);
-  // Older firmware stores the password as cleartext; newer 0BA6 (ES10) stores it XOR-obfuscated
-  // (LSC SymmetricalSimpleEncoding). We can't always tell which, so we show BOTH interpretations
-  // and let the operator recognise their password.
-  const cleartext = passwordString(pw);
-  const decoded = simpleDecode(pw);
+  // The stored representation is fixed by the device model, and we know which one we're talking to
+  // from the IdentNo: the 0BA6.ES10 (0x45, LSC Logo6Update2) stores it XOR-obfuscated
+  // (SymmetricalSimpleEncoding); the 0BA5 and earlier 0BA6 (0x42/0x43/0x44) store cleartext. So we
+  // decode the RIGHT way instead of guessing, and only mention the alternative as a fallback.
+  const usesXor = conn.identNo === 0x45;
+  const primary = usesXor ? simpleDecode(pw) : passwordString(pw);
+  const other = usesXor ? passwordString(pw) : simpleDecode(pw);
+  const primaryLabel = usesXor ? 'XOR-decoded (0BA6.ES10 "protect customer")' : 'cleartext';
+  const otherLabel = usesXor ? 'cleartext' : 'XOR-decoded';
   if (pwnz) {
-    app.log('Password @0x00FF0566: raw bytes ' + hex(pw), 'ok');
-    app.log('  → as cleartext (older firmware): "' + cleartext + '"', 'mut');
-    app.log('  → XOR-decoded (newer 0BA6 / ES10 "protect customer"): "' + decoded + '"', 'mut');
+    app.log('Password @0x00000566: raw bytes ' + hex(pw), 'ok');
+    app.log('  → ' + primaryLabel + ' [' + conn.deviceName + ']: "' + primary + '"', 'ok');
+    app.log('  → if that looks wrong, ' + otherLabel + ': "' + other + '"', 'mut');
   } else {
-    app.log('Password area @0x00FF0566: all zero — the device did not return a readable password', 'err');
+    app.log('Password area @0x00000566: all zero — the device did not return a readable password', 'err');
   }
 
   // Verify prompt (OK / Cancel). This is the client-side "compare" step — the operator confirms
   // the recovered password looks right before we touch the protection register.
   const msg = pwnz
     ? 'Password read from the device (raw ' + hex(pw) + '):\n\n' +
-      '  • cleartext (older firmware):   "' + cleartext + '"\n' +
-      '  • XOR-decoded (newer 0BA6/ES10): "' + decoded + '"\n\n' +
-      'One of these is your password (it depends on firmware). Verify it looks right.\n\n' +
+      '  ▶ ' + primaryLabel + ':  "' + primary + '"\n' +
+      '     (fallback ' + otherLabel + ': "' + other + '")\n\n' +
+      'The first line is how your ' + conn.deviceName + ' stores it. Verify it looks right.\n\n' +
       'OK  = clear protection (write 0x00FF4800 = 0, what LOGO!Soft does) and read the program.\n' +
       'Cancel = abort, nothing is written.'
-    : 'The device did NOT return a readable password (0x00FF0566 is all zero) — this firmware is not leaking it.\n\n' +
-      'OK  = try the clear-protection write anyway (0x00FF4800 = 0, the register LOGO!Soft uses) and see if the program opens.\n' +
-      'Cancel = abort, nothing is written.';
+    : '⚠ EXPERIMENTAL BYPASS — this is NOT password recovery.\n\n' +
+      'The device did NOT return a readable password (0x00000566 is all zero) — this firmware is\n' +
+      'not leaking it, so there is nothing to verify. Clicking OK does not recover your password;\n' +
+      'it gambles that the clear-protection register alone opens read access on this firmware.\n\n' +
+      'OK  = WRITE 0x00FF4800 = 0 to the PLC and see if the program opens (reversible with Re-lock).\n' +
+      'Cancel = abort, nothing is written. (Recommended unless you are deliberately testing this.)';
   if (!app.ui.confirm(msg)) {
     app.log('Aborted at the verify prompt — nothing was written to the PLC.', 'mut');
     return;
+  }
+  if (!pwnz) {
+    app.log('⚠ No password was recovered — proceeding with the EXPERIMENTAL clear-protection write only (not password recovery).', 'err');
   }
 
   // The clear-protection write: 0x00FF4800 = 0 (LSC ADR_CLEAR_PASSWORD_ACTIVE). Reversible with
@@ -100,14 +110,14 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
     // the program read.
     const pw2 = await conn.readRegion(ADDR.PWD_MEM, 10, 'password area (after clear)');
     const pw2nz = [...pw2].some((b) => b);
-    app.log('Password area @0x00FF0566 (after clear): ' + (pw2nz ? '"' + passwordString(pw2) + '"  raw ' + hex(pw2) : 'still all zero'), pw2nz ? 'ok' : 'err');
+    app.log('Password area @0x00000566 (after clear): ' + (pw2nz ? '"' + passwordString(pw2) + '"  raw ' + hex(pw2) : 'still all zero'), pw2nz ? 'ok' : 'err');
     app.log('Verifying read access to the program area…', 'mut');
     const test = await conn.readRegion(ADDR.PROGRAM, 16, 'program probe');
     let nz = 0;
     for (const d of test) if (d) nz++;
     if (nz > 0 || pw2nz) {
       opened = true;
-      app.log('Read access OPEN — 0x00FF0EE8 returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & decode”.', 'ok');
+      app.log('Read access OPEN — 0x00000EE8 returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & decode”.', 'ok');
     } else {
       app.log('Still all zero after writing 0x00FF4800 = 0 — the corrected clear register did not open reads either.', 'err');
       app.log('This is the FIRST time the register LOGO!Soft actually uses (0x4800) was tried on this device. If it still holds, the 0BA6.ES10 (fw V1.07.07) genuinely enforces read protection. Options: power-cycle then retry; otherwise the program may only be recoverable from an original .lsc source.', 'mut');

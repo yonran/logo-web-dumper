@@ -42,6 +42,11 @@ export class Connection {
     return this.device.name;
   }
 
+  /** IdentNo of the detected device (0x42 0BA5 … 0x45 0BA6.ES10). Set by connect(). */
+  get identNo(): number {
+    return this.device.identNo;
+  }
+
   async close(): Promise<void> {
     await this.xport.close();
   }
