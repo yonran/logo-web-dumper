@@ -275,3 +275,9 @@ a browser refresh — reload state from the device where possible, and where not
   (E2). Created this notebook. Documented the no-password-entry literature result. Added an
   explicit connect-time warning that protection *level* is not device-reportable (reversibility
   rule).
+- **2026-07-17** — Split the single "Recover password & attempt unlock" step into two: read-only
+  **"3 · Recover password"** (`recoverPassword`) and the armed **"4 · Clear protection & unlock"**
+  write (`clearProtectionAndUnlock`). The recovered password is now shown **non-modally** in a
+  persistent inline panel (`#pwout`) instead of a `window.confirm()` pop-up — the operator reads
+  and verifies it, then makes the write a deliberate separate action. Read program → step 5,
+  Re-lock → step 6. The write's undo (Re-lock) is unchanged and still device-state driven.

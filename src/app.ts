@@ -25,8 +25,11 @@ export interface Ui {
   setStatus(text: string, cls: LogClass): void;
   /** Show/update the running-operation progress indicator; `null` hides it. */
   setProgress(p: ProgressView | null): void;
-  /** Show an OK/Cancel prompt; returns true on OK. Used to verify the recovered password. */
-  confirm(message: string): boolean;
+  /**
+   * Display the recovered password value non-modally (in a persistent panel, not a pop-up).
+   * Pass an empty string to clear it. The operator reads this before choosing to clear protection.
+   */
+  showPassword(text: string): void;
   /** Offer a byte blob to the user as a file download (a DOM action, kept off the action layer). */
   download(filename: string, bytes: Uint8Array): void;
 }

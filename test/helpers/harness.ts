@@ -13,10 +13,10 @@ export class FakeUi implements Ui {
   status = '';
   statusCls: LogClass = null;
   inputs: Record<string, string> = {};
-  /** What confirm() returns (set false to simulate the operator clicking Cancel). */
-  confirmReturn = true;
-  /** Messages passed to confirm(), for assertions. */
-  readonly confirmMessages: string[] = [];
+  /** The current non-modal password panel text (last value passed to showPassword). */
+  password = '';
+  /** Every value passed to showPassword(), for assertions. */
+  readonly passwordShown: string[] = [];
   /** Files offered via download(), for assertions. */
   readonly downloads: { name: string; bytes: Uint8Array }[] = [];
   /** Progress snapshots passed to setProgress(), for assertions (null = hidden). */
@@ -35,9 +35,9 @@ export class FakeUi implements Ui {
   setProgress(p: ProgressView | null): void {
     this.progress.push(p);
   }
-  confirm(message: string): boolean {
-    this.confirmMessages.push(message);
-    return this.confirmReturn;
+  showPassword(text: string): void {
+    this.password = text;
+    this.passwordShown.push(text);
   }
   download(name: string, bytes: Uint8Array): void {
     this.downloads.push({ name, bytes });

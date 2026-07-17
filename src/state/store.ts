@@ -11,6 +11,12 @@ export interface AppState {
   stopped: boolean;
   /** A password exists on the device (0x48FF === 0x40). `null` = not yet known. */
   protected: boolean | null;
+  /**
+   * The stored password was read back and displayed this session. Session-only, and used ONLY to
+   * steer the "do this next" glow from Recover → Clear protection — never to gate a write or an
+   * undo (those derive from device state, so they survive a refresh; this flag does not).
+   */
+  passwordRead: boolean;
   /** We lowered protection this session (an undo, Re-lock, is owed). */
   unlocked: boolean;
   /** A program dump has been read this session. */
@@ -21,6 +27,7 @@ export const INITIAL_STATE: AppState = {
   connected: false,
   stopped: false,
   protected: null,
+  passwordRead: false,
   unlocked: false,
   dumped: false,
 };

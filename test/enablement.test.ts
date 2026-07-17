@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { BUTTON_IDS, buttonEnablement } from '../src/ui/enablement.js';
 import type { AppState } from '../src/state/store.js';
 
-const base: AppState = { connected: false, stopped: false, protected: null, unlocked: false, dumped: false };
+const base: AppState = { connected: false, stopped: false, protected: null, passwordRead: false, unlocked: false, dumped: false };
 const s = (patch: Partial<AppState>): AppState => ({ ...base, ...patch });
 
 test('disconnected: only connect + always-on enabled; connect glows', () => {
@@ -46,10 +46,19 @@ test('stopped, protection unknown: reads + unlock enabled; relock off; decode gl
   assert.equal(next, 'decode');
 });
 
-test('stopped, protected: unlock enabled + glows; relock enabled', () => {
+test('stopped, protected: recover glows first; recover + unlock enabled; relock enabled', () => {
   const { enabled, next } = buttonEnablement(s({ connected: true, stopped: true, protected: true }));
+  assert.equal(enabled.recover, true);
   assert.equal(enabled.unlock, true);
   assert.equal(enabled.relock, true);
+  // Read the password (recover) before the protection-clearing write (unlock).
+  assert.equal(next, 'recover');
+});
+
+test('stopped, protected, password read: unlock (the write) now glows', () => {
+  const { enabled, next } = buttonEnablement(s({ connected: true, stopped: true, protected: true, passwordRead: true }));
+  assert.equal(enabled.recover, true);
+  assert.equal(enabled.unlock, true);
   assert.equal(next, 'unlock');
 });
 

@@ -8,7 +8,7 @@ import { Logger } from '../src/log.js';
 import { ADDR } from '../src/pg/constants.js';
 import { FakeDevice } from './helpers/fake-device.js';
 import { logged, makeHarness } from './helpers/harness.js';
-import { recoverPasswordAndUnlock } from '../src/actions/password.js';
+import { recoverPassword, clearProtectionAndUnlock } from '../src/actions/password.js';
 import { readAllAndDecode } from '../src/actions/program.js';
 
 test('unrecognised IdentNo connects (diagnostics) but is unverified and blocks the program read', async () => {
@@ -53,9 +53,10 @@ test('0BA5 reads the program at the bare 2-byte 0x0EE8', async () => {
 
 test('0BA5 leaking device: full unlock recovers the cleartext and opens the program', async () => {
   const h = makeHarness({ identNo: 0x42, passwordExists: true, leaksCleartext: true, clearWriteUnlocks: true, password: 'ba5pw', program: new Uint8Array(8).fill(0x33) });
-  await recoverPasswordAndUnlock(h.app);
+  await recoverPassword(h.app);
   assert.equal(h.conn.deviceName, '0BA5');
   assert.ok(logged(h.logger, 'ba5pw'));
+  await clearProtectionAndUnlock(h.app);
   assert.ok(logged(h.logger, 'Read access OPEN'));
   // The clear write went out as a 2-byte address (01 48 00 00), not the 4-byte form.
   assert.ok(h.device.writes.some((w) => w[0] === 0x01 && w[1] === 0x48 && w[2] === 0x00 && w[3] === 0x00 && w.length === 4));

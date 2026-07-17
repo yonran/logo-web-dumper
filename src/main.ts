@@ -36,7 +36,10 @@ const ui: Ui = {
     const head = indeterminate ? p.label + ' — working…' : p.label + ' — ' + pct + '%';
     $('#progresstext').textContent = p.detail ? head + ' · ' + p.detail : head;
   },
-  confirm: (m) => window.confirm(m),
+  showPassword: (text) => {
+    // A non-modal panel: setting it empty hides it via `#pwout:empty { display:none }`.
+    $('#pwout').textContent = text;
+  },
   download: (filename, bytes) => downloadBytes(filename, bytes),
 };
 

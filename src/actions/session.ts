@@ -33,7 +33,7 @@ export async function doConnect(app: App, pref: TransportMode): Promise<void> {
       }
     }
     app.conn = null;
-    app.store.set({ connected: false, stopped: false, protected: null, unlocked: false, dumped: false });
+    app.store.set({ connected: false, stopped: false, protected: null, passwordRead: false, unlocked: false, dumped: false });
     app.ui.setStatus('not connected', 'err');
     const msg = e instanceof Error ? e.message : String(e);
     const name = e instanceof Error ? e.name : '';
@@ -59,7 +59,7 @@ export async function doDisconnect(app: App): Promise<void> {
   const conn = app.requireConn();
   await conn.close();
   app.conn = null;
-  app.store.set({ connected: false, stopped: false, protected: null, unlocked: false, dumped: false });
+  app.store.set({ connected: false, stopped: false, protected: null, passwordRead: false, unlocked: false, dumped: false });
   app.ui.setStatus('not connected', 'mut');
   app.log('Disconnected.', 'ok');
 }
@@ -99,7 +99,7 @@ export async function doStop(app: App): Promise<void> {
   app.log(
     'Password ' +
       (isPasswordSet(p)
-        ? 'IS set (0x48FF=0x40) — use step 3 to unlock, step 5 to re-lock.'
+        ? 'IS set (0x48FF=0x40) — use steps 3–4 to unlock, step 6 to re-lock.'
         : 'is not set (0x48FF=0x' + p.toString(16) + ').'),
     isPasswordSet(p) ? 'mut' : 'ok',
   );
@@ -109,7 +109,7 @@ export async function doStop(app: App): Promise<void> {
   // (unprotected). Make that unknowable-state explicit rather than pretend it's re-locked.
   if (isPasswordSet(p)) {
     app.log(
-      'Note: the device can report that a password exists but NOT the current protection level. If you (or an earlier session/refresh) ran an unlock, this LOGO! may still be UNPROTECTED right now — press “5 · Re-lock” to be certain. Re-lock works cross-session.',
+      'Note: the device can report that a password exists but NOT the current protection level. If you (or an earlier session/refresh) ran an unlock, this LOGO! may still be UNPROTECTED right now — press “6 · Re-lock” to be certain. Re-lock works cross-session.',
       'err',
     );
   }

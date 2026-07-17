@@ -9,7 +9,7 @@ import { Connection } from '../src/pg/connection.js';
 import { Logger } from '../src/log.js';
 import { ADDR } from '../src/pg/constants.js';
 import { readFirmware } from '../src/actions/diagnostics.js';
-import { recoverPasswordAndUnlock } from '../src/actions/password.js';
+import { recoverPassword, clearProtectionAndUnlock } from '../src/actions/password.js';
 import { readAllAndDecode } from '../src/actions/program.js';
 import { FakeDevice } from './helpers/fake-device.js';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
@@ -117,7 +117,7 @@ test('reading the protected program area yields all zeros', async () => {
 
 test('unlock with the corrected 0x4800 write still does not take on the ES10 model', async () => {
   const h = makeHarness(ES10);
-  await recoverPasswordAndUnlock(h.app);
+  await clearProtectionAndUnlock(h.app);
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00)); // the CORRECTED clear write (0x4800)
   assert.ok(logged(h.logger, 'Program read NOT opened'));
 });
@@ -127,7 +127,7 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
   // must not spend a minute reading zeros and save a junk file. The guard depends on `unlocked`
   // reflecting real read access, not merely that a write was attempted.
   const h = makeHarness(ES10);
-  await recoverPasswordAndUnlock(h.app);
+  await clearProtectionAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, false);
   await readAllAndDecode(h.app);
   assert.ok(logged(h.logger, 'PASSWORD-PROTECTED'));
@@ -152,7 +152,7 @@ test('0BA6 read pulls the program image via Read Block from the bare Logo6 map (
 
 test('unlock keeps the verified byte-read session instead of risking a rejected block probe', async () => {
   const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: false, program: new Uint8Array(16).fill(0x33) });
-  await recoverPasswordAndUnlock(h.app);
+  await clearProtectionAndUnlock(h.app);
   assert.ok(logged(h.logger, 'OPEN via Read Byte'));
   assert.equal(h.device.writes.some((w) => w[0] === 0x05), false);
   assert.equal(h.store.get().unlocked, true);
@@ -160,7 +160,7 @@ test('unlock keeps the verified byte-read session instead of risking a rejected 
 
 test('full read preserves the session that was successfully unlocked', async () => {
   const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, program: new Uint8Array(512).fill(0x44) });
-  await recoverPasswordAndUnlock(h.app);
+  await clearProtectionAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, true);
   const reconnectsBefore = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
   await readAllAndDecode(h.app);
@@ -181,7 +181,7 @@ test('uniform program images are saved as diagnostic evidence', async () => {
 test('unlock: ES10 rejects Read Block AND Read Byte stays zero → not opened', async () => {
   // The real ES10 so far: Read Block rejected, Read Byte all-zero. Must NOT report opened.
   const h = makeHarness(ES10); // blockReadsWork:false, clearWriteUnlocks:false
-  await recoverPasswordAndUnlock(h.app);
+  await clearProtectionAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, false);
   assert.ok(logged(h.logger, 'Program read NOT opened'));
 });
@@ -193,8 +193,9 @@ test('contrast: a leaking (0BA5-style) device DOES yield the cleartext under the
   // A device that both leaks the password store AND honours the clear write. identNo 0x43 stores
   // cleartext (no XOR), so "hunter2" shows as the primary reading.
   const h = makeHarness({ ...ES10, identNo: 0x43, leaksCleartext: true, clearWriteUnlocks: true, password: 'hunter2', program: new Uint8Array(16).fill(0x5a) });
-  await recoverPasswordAndUnlock(h.app);
+  await recoverPassword(h.app);
   assert.ok(logged(h.logger, 'hunter2'));
+  await clearProtectionAndUnlock(h.app);
   assert.ok(logged(h.logger, 'Read access OPEN'));
 });
 
@@ -203,8 +204,9 @@ test('isolates firmware vs tool: password hidden, but a correct 0x4800 write DOE
   // yet the clear-protection write exposes the program. The tool must still unlock and mark it open
   // — proving that when the real ES10 stays zero, it is the FIRMWARE holding, not the tool.
   const h = makeHarness({ ...ES10, leaksCleartext: false, clearWriteUnlocks: true, program: new Uint8Array(16).fill(0x77) });
-  await recoverPasswordAndUnlock(h.app);
+  await recoverPassword(h.app);
   assert.ok(logged(h.logger, 'all zero')); // the password itself was never recovered
+  await clearProtectionAndUnlock(h.app);
   assert.ok(logged(h.logger, 'Read access OPEN'));
   assert.equal(h.store.get().unlocked, true);
 });

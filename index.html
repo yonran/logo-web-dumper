@@ -51,6 +51,9 @@
   .pbar.indeterminate>span{width:35%;animation:indet 1.1s ease-in-out infinite}
   @keyframes indet{0%{left:-35%}100%{left:100%}}
   @media (prefers-reduced-motion:reduce){.pbar.indeterminate>span{animation:none;width:100%;opacity:.5}}
+  /* Non-modal recovered-password panel: shown inline (no pop-up), hidden entirely when empty. */
+  #pwout{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:13px;background:var(--card);border:1px solid var(--acc);border-left:3px solid var(--acc);border-radius:8px;padding:10px 12px;margin:10px 0 0;user-select:all}
+  #pwout:empty{display:none}
 </style>
 </head>
 <body>
@@ -67,7 +70,7 @@
 </div>
 
 <div class="card">
-  <p class="mut" style="font-size:12.5px;margin:0 0 8px">Do these in order. Steps <b>3</b> and <b>5</b> write to the PLC and require a second click to confirm.</p>
+  <p class="mut" style="font-size:12.5px;margin:0 0 8px">Do these in order. Steps <b>4</b> and <b>6</b> write to the PLC and require a second click to confirm.</p>
   <div class="row">
     <button id="connect">1 &middot; Connect cable</button>
     <button id="disconnect" class="sec" disabled>Disconnect</button>
@@ -79,9 +82,10 @@
       </select>
     </label>
     <button id="stop" disabled>2 &middot; Put in STOP</button>
-    <button id="unlock" disabled>3 &middot; Recover password &amp; attempt unlock &#9888;</button>
-    <button id="decode" disabled>4 &middot; Read program &amp; save</button>
-    <button id="relock" disabled>5 &middot; Re-lock &#9888;</button>
+    <button id="recover" disabled>3 &middot; Recover password</button>
+    <button id="unlock" disabled>4 &middot; Clear protection &amp; unlock &#9888;</button>
+    <button id="decode" disabled>5 &middot; Read program &amp; save</button>
+    <button id="relock" disabled>6 &middot; Re-lock &#9888;</button>
     <button id="abort" class="sec" disabled>Abort</button>
     <span id="status" class="mut">not connected</span>
   </div>
@@ -89,8 +93,9 @@
     <div id="progressbar" class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-live="polite"><span id="progressfill"></span></div>
     <span id="progresstext" class="mut" style="font-size:12.5px"></span>
   </div>
+  <div id="pwout" role="status" aria-live="polite"></div>
   <p class="mut" style="font-size:12.5px;margin:8px 0 0">
-    Step 3 is only needed if the program is password-protected: it displays a readable stored password (cleartext on older models, XOR-decoded on ES10) and can lower protection so step 4 can read. If the store is hidden, the optional write is explicitly labelled an experimental bypass. Step 5 restores protection. No password &rarr; skip to step 4.
+    Steps 3&ndash;4 are only needed if the program is password-protected. Step 3 <b>reads and displays</b> the stored password (cleartext on older models, XOR-decoded on ES10) &mdash; it never writes to the PLC, so read it and verify it looks right. Step 4 then <b>clears protection</b> so step 5 can read; if the store is hidden, that write is explicitly labelled an experimental bypass. Step 6 restores protection. No password &rarr; skip to step 5.
   </p>
 </div>
 

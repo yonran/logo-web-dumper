@@ -12,6 +12,7 @@ export const BUTTON_IDS = [
   'ident',
   'restart',
   'fw',
+  'recover',
   'unlock',
   'decode',
   'dump',
@@ -33,6 +34,10 @@ export interface Enablement {
 export function buttonEnablement(s: AppState): Enablement {
   const C = s.connected;
   const ST = C && s.stopped;
+  // Reading the password (recover) is read-only and re-runnable; clearing protection (unlock) is
+  // the write. Both are gated on device state (a password exists), not on the session-only
+  // passwordRead flag — so they still enable correctly after a page refresh.
+  const canRecover = ST && s.protected !== false && !s.unlocked;
   const canUnlock = ST && s.protected !== false && !s.unlocked;
   const enabled: Record<ButtonId, boolean> = {
     connect: !C,
@@ -42,6 +47,7 @@ export function buttonEnablement(s: AppState): Enablement {
     ident: C,
     restart: C,
     fw: ST,
+    recover: canRecover,
     unlock: canUnlock,
     decode: ST,
     dump: ST,
@@ -59,6 +65,8 @@ export function buttonEnablement(s: AppState): Enablement {
   let next: ButtonId | null = null;
   if (!C) next = 'connect';
   else if (!s.stopped) next = 'stop';
+  // Guide the operator to READ the password first, then to the protection-clearing write.
+  else if (s.protected === true && !s.unlocked && !s.passwordRead) next = 'recover';
   else if (s.protected === true && !s.unlocked) next = 'unlock';
   else if (!s.dumped) next = 'decode';
   else if (s.unlocked) next = 'relock';

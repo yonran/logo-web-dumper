@@ -9,7 +9,7 @@ import type { TransportMode } from '../transport/types.js';
 import { buttonEnablement } from './enablement.js';
 import { $, copyText, downloadText } from '../util/dom.js';
 import { dumpRegion, nameTest, readFirmware } from '../actions/diagnostics.js';
-import { recoverPasswordAndUnlock, relock } from '../actions/password.js';
+import { recoverPassword, clearProtectionAndUnlock, relock } from '../actions/password.js';
 import { decodeFile, readAllAndDecode } from '../actions/program.js';
 import { doCheckMode, doConnect, doDisconnect, doIdentify, doRestart, doStop } from '../actions/session.js';
 
@@ -70,10 +70,13 @@ export function wireUi(app: App): void {
     abortBtn.disabled = !busy;
     if (!busy) abortBtn.textContent = 'Abort';
     document.querySelectorAll('button').forEach((b) => b.classList.toggle('next', b.id === next && !b.disabled));
+    // Clear the non-modal password panel once the session resets (disconnect clears passwordRead),
+    // so a stale password never lingers on screen after the cable is unplugged.
+    if (!s.passwordRead) $('#pwout').textContent = '';
     if (app.conn?.known) {
       const mem = app.conn.mem;
       $<HTMLButtonElement>('#decode').textContent =
-        mem.decode === 'legacy2460' ? '4 · Read program & decode' : '4 · Read program & save raw';
+        mem.decode === 'legacy2460' ? '5 · Read program & decode' : '5 · Read program & save raw';
       // Refill the dump defaults only when the DETECTED device changes (e.g. Identify finds a 0BA5),
       // not on every state change — otherwise a hand-typed dump address would be wiped by any action.
       if (dumpDefaultsFor !== app.conn.deviceName) {
@@ -198,9 +201,11 @@ export function wireUi(app: App): void {
   on('nametest', nameTest, 'name read');
   on('dump', dumpRegion, 'dump');
   on('decode', readAllAndDecode, 'program read');
+  // Recover is read-only (reads the password back and displays it) — no write, so no arming.
+  on('recover', recoverPassword, 'password recovery');
 
   // ---- writes (armed) ----
-  armWrite('unlock', recoverPasswordAndUnlock, 'unlock');
+  armWrite('unlock', clearProtectionAndUnlock, 'unlock');
   armWrite('relock', relock, 're-lock');
 
   // ---- abort ---- (only meaningful while an operation is running)
