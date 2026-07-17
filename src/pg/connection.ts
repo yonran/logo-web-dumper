@@ -257,6 +257,10 @@ export class Connection {
    */
   async readRegion(addr: number, count: number, label: string): Promise<Uint8Array> {
     const out = new Uint8Array(count);
+    // Show the exact command actually sent — the per-byte reads are quiet, so without this the log
+    // never records WHICH address a region dump used (which once left a bare-vs-paged read ambiguous).
+    const firstCmd = new Uint8Array([OP.READ_BYTE, ...encodeAddr(this.device, addr)]);
+    this.logger.log('  ' + label + ': → ' + hex(firstCmd) + ' …   (Read Byte ×' + count + ', ' + addr8(addr) + '…' + addr8((addr + count - 1) >>> 0) + ')', 'mut');
     const t0 = Date.now();
     for (let i = 0; i < count; i++) {
       if (this.abort) {
