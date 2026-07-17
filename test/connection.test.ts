@@ -5,8 +5,33 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Connection } from '../src/pg/connection.js';
 import { Logger } from '../src/log.js';
-import { ADDR, isStopMode } from '../src/pg/constants.js';
+import { ADDR, getAdress, isStopMode } from '../src/pg/constants.js';
 import { FakeDevice, type FakeDeviceConfig } from './helpers/fake-device.js';
+
+test('getAdress: pages symbolic registers ≥ 0x1F00, leaves lower bases bare', () => {
+  // ≥ 0x1F00 → OR the 0x00FF____ page (LSC Logo6.getAdress).
+  assert.equal(getAdress(0x1f00), 0x00ff1f00);
+  assert.equal(getAdress(0x48ff), 0x00ff48ff);
+  assert.equal(getAdress(0x4800), 0x00ff4800);
+  assert.equal(getAdress(0x4801), 0x00ff4801);
+  // < 0x1F00 → bare.
+  assert.equal(getAdress(0x0566), 0x00000566);
+  assert.equal(getAdress(0x0570), 0x00000570);
+  assert.equal(getAdress(0x1eff), 0x00001eff); // just below the boundary stays bare
+  // The whole ADDR table is derived from getAdress, so this is what the constants must equal.
+  assert.equal(ADDR.PWD_EXISTS, 0x00ff48ff);
+  assert.equal(ADDR.PL_CLEAR, 0x00ff4800);
+  assert.equal(ADDR.PWD_MEM, 0x00000566);
+});
+
+test('getAdress is NOT applied to the program image — 0x3292 is ≥ 0x1F00 yet stays bare', () => {
+  // The critical divergence: the program body address is ≥ 0x1F00, so the naive threshold rule
+  // would page it to 0x00FF3292 — but it is a Memory read, so its wire form is bare 0x00003292.
+  // The ProgramMap must hold the bare base, i.e. it must NOT have gone through getAdress.
+  const c = new Connection(new FakeDevice({ identNo: 0x45 }), new Logger());
+  assert.equal(c.mem.programBase, 0x00003292);
+  assert.notEqual(c.mem.programBase, getAdress(0x3292)); // getAdress(0x3292) === 0x00FF3292
+});
 
 function make(cfg: FakeDeviceConfig = {}): { c: Connection; d: FakeDevice; l: Logger } {
   const d = new FakeDevice(cfg);

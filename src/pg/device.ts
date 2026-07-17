@@ -54,10 +54,12 @@ const MAP_LEGACY: ProgramMap = {
 
 // 0BA6 (LSC Logo6.getMemories): ProgOffsetTabelle 0x2FAA, Anchors 0x31CA, Program 0x3292;
 // getNumberOfUploadTransferBytes = 13464. These are read as BARE 4-byte addresses (0x0000____),
-// NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in getAdress, which the symbolic register reads
-// (flag/magic/protection) use — but the program/offset-table/wiring are Memory objects read via
-// Memory.upload → readByteArray(rawBase), which never calls getAdress. So the wire address is the
-// raw base. One contiguous read from the offset table captures the whole image.
+// NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in getAdress() (constants.ts), which the
+// symbolic register reads (flag/magic/protection) use — but the program/offset-table/wiring are
+// Memory objects read via Memory.upload → readByteArray(rawBase), which never calls getAdress. So
+// these bases are deliberately literal bare values here (NOT getAdress'd — that is the whole point:
+// 0x3292 is ≥ 0x1F00 yet must stay bare). One contiguous read from the offset table captures the
+// whole image.
 const MAP_0BA6: ProgramMap = {
   regions: [{ base: 0x00002faa, len: 13464, name: 'program image (offset table + wiring + program)' }],
   programBase: 0x00003292,

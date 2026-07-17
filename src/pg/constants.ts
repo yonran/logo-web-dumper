@@ -12,32 +12,58 @@ export const OP = {
   NOK: 0x15,
 } as const;
 
-/** 32-bit addresses under the 0BA6 `0x00FF____` page. */
+/**
+ * The 0BA6 address-paging rule, in ONE place — LSC `Logo6.getAdress` (verified from V8.0 bytecode):
+ * expand a base 16-bit register address to its 0BA6 32-bit wire form by ORing the `0x00FF____`
+ * page onto it, but ONLY for addresses ≥ `0x1F00`. Anything below stays a bare `0x0000____`.
+ *
+ * This yields the canonical (0BA6) wire form; a 0BA5 later drops the page when `wireAddr()` masks
+ * to its 2-byte width (see device.ts), so `0x00FF48FF & 0xFFFF = 0x48FF` — one shared constant
+ * serves both families.
+ *
+ * SCOPE — this rule governs SYMBOLIC-REGISTER reads only (password flag, magic, ident, firmware,
+ * protection). The program IMAGE (offset table / anchors / program body) is a Memory read
+ * (`Memory.upload → readByteArray`) that NEVER goes through getAdress and is ALWAYS bare — even
+ * when its address is ≥ `0x1F00` (the 0BA6 program at `0x3292` → bare `0x00003292`, NOT
+ * `0x00FF3292`, which reads all-zero on the ES10). Those bare addresses therefore do NOT belong
+ * here; they live in the per-device `ProgramMap` (device.ts) as literal bare bases. Keeping the
+ * page rule in this single function is what makes it structurally impossible to bake a symbolic
+ * register with the wrong page.
+ */
+export function getAdress(base16: number): number {
+  return (base16 >= 0x1f00 ? base16 | 0xff0000 : base16) >>> 0;
+}
+
+/**
+ * Symbolic-register addresses, each declared as its base 16-bit value run through `getAdress()`
+ * so the `0x00FF____` page is applied by the single rule above, never by hand. (The resulting
+ * 0BA6 wire forms are `0x00FF1F00`, `0x00FF48FF`, `0x00FF4800`, … and the < 0x1F00 shared reads
+ * `0x00000566` / `0x00000570` stay bare.)
+ */
 export const ADDR = {
-  PWD_MAGIC1: 0x00ff1f00, // must read 0x04
-  PWD_MAGIC2: 0x00ff1f01, // must read 0x00
-  IDENT: 0x00ff1f02, // ident byte (proven readable on 0BA6.ES10)
-  FW_START: 0x00ff1f03, // firmware string "V.." runs 1F03..1F08
-  FW_END: 0x00ff1f08,
-  PWD_EXISTS: 0x00ff48ff, // 0x40 = password set (LSC ADR_PASSWORD_FLAG; ≥0x1F00 → 0x00FF page)
-  // Program-region addresses are BARE (no 0x00FF page). Verified from LSC Logo6.getAdress: it
-  // only ORs 0xFF0000 onto addresses ≥ 0x1F00; anything below stays a bare 16-bit value, sent as
-  // a 4-byte address 0x0000____. Our old 0x00FF0566 / 0x00FF0EE8 were wrong (they read zeros
-  // while the ≥0x1F00 system registers worked), which is why every program/password read failed.
-  PWD_MEM: 0x00000566, // 10-byte password store (bare; shared across families via getAdress)
-  PROG_NAME: 0x00000570, // 16-byte ASCII program name (bare, < 0x1F00; shared)
+  PWD_MAGIC1: getAdress(0x1f00), // must read 0x04
+  PWD_MAGIC2: getAdress(0x1f01), // must read 0x00
+  IDENT: getAdress(0x1f02), // ident byte (proven readable on 0BA6.ES10)
+  FW_START: getAdress(0x1f03), // firmware string "V.." runs 1F03..1F08
+  FW_END: getAdress(0x1f08),
+  PWD_EXISTS: getAdress(0x48ff), // 0x40 = password set (LSC ADR_PASSWORD_FLAG)
+  // Password store + program name: base < 0x1F00, so getAdress leaves them BARE (0x0000____).
+  // Shared across families. Our old 0x00FF0566 / 0x00FF0EE8 were wrong (they read zeros while the
+  // ≥0x1F00 system registers worked), which is why every program/password read failed.
+  PWD_MEM: getAdress(0x0566), // 10-byte password store (bare)
+  PROG_NAME: getAdress(0x0570), // 16-byte ASCII program name (bare)
   // Protection registers, VERIFIED by decompiling LOGO!Soft Comfort V8.0
   // (DE.siemens.ad.logo.model.hardware.Modular0.getAdress + clearPasswordOnLogo/set method).
   // LSC clears protection by writing 0 to 0x4800 and re-sets it by writing 0 to 0x4801.
-  PL_CLEAR: 0x00ff4800, // ADR_CLEAR_PASSWORD_ACTIVE — write 0 to UNLOCK (what LSC actually does)
-  PL_SET: 0x00ff4801, // ADR_SET_PASSWORD_ACTIVE — write 0 to RE-LOCK
+  PL_CLEAR: getAdress(0x4800), // ADR_CLEAR_PASSWORD_ACTIVE — write 0 to UNLOCK (what LSC actually does)
+  PL_SET: getAdress(0x4801), // ADR_SET_PASSWORD_ACTIVE — write 0 to RE-LOCK
   // Legacy addresses from brickpool's LogoPG.cpp (its protection-level labels are wrong: it
   // calls 0x4800 "level 2 read protection", but LSC uses it to CLEAR protection). Kept for
   // reference; 0x4740 is what this tool used to write and it never took on the 0BA6.ES10.
-  PL_LEVEL1: 0x00ff4740, // brickpool "level 1 (no protection)" — NOT what LSC writes
-  PL_LEVEL3: 0x00ff4100, // brickpool "level 3 (read/write protection)"
-  // The program/pointer/wiring addresses are NOT here — they differ per device family and live in
-  // the DeviceProfile's ProgramMap (see device.ts). 0BA4/0BA5 use a low bare map; 0BA6 a high paged one.
+  PL_LEVEL1: getAdress(0x4740), // brickpool "level 1 (no protection)" — NOT what LSC writes
+  PL_LEVEL3: getAdress(0x4100), // brickpool "level 3 (read/write protection)"
+  // The program/pointer/wiring addresses are NOT here — they differ per device family, are Memory
+  // reads (never paged), and live in the DeviceProfile's ProgramMap (see device.ts).
 } as const;
 
 export const PWD_EXISTS_YES = 0x40;
