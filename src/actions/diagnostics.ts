@@ -43,7 +43,7 @@ export async function checkPassword(app: App): Promise<number> {
   );
   const m1 = await conn.readByte(ADDR.PWD_MAGIC1);
   const m2 = await conn.readByte(ADDR.PWD_MAGIC2);
-  app.log('Password magic @1F00/1F01 = 0x' + m1.toString(16) + '/0x' + m2.toString(16) + '  (documented: 0x04/0x00)', m1 === 0x04 && m2 === 0x00 ? 'ok' : 'mut');
+  app.log('Password magic @1F00/1F01 = 0x' + m1.toString(16) + '/0x' + m2.toString(16) + '  (expected 0x04/0x00 per PROTOCOL.md §3.4)', m1 === 0x04 && m2 === 0x00 ? 'ok' : 'mut');
   app.store.set({ protected: p === PWD_EXISTS_YES });
   return p;
 }

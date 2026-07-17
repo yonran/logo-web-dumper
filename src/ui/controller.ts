@@ -5,6 +5,7 @@
 import type { App } from '../app.js';
 import type { AppState } from '../state/store.js';
 import type { TransportMode } from '../transport/types.js';
+import { buttonEnablement } from './enablement.js';
 import { $, copyText, downloadText } from '../util/dom.js';
 import {
   blockDiag,
@@ -42,42 +43,10 @@ export function wireUi(app: App): void {
 
   // ---- button enablement + "do this next" glow, derived from state ----
   function render(s: Readonly<AppState>): void {
-    const C = s.connected;
-    const ST = C && s.stopped;
-    const canUnlock = ST && s.protected !== false && !s.unlocked;
-    const en: Record<string, boolean> = {
-      connect: !C,
-      stop: C,
-      mode: C,
-      ident: C,
-      restart: C,
-      fw: C,
-      unlock: canUnlock,
-      unlocknoreneg: canUnlock,
-      decode: ST,
-      dump: ST,
-      nametest: ST,
-      findmem: ST,
-      probe: ST,
-      blockdiag: ST,
-      // Re-lock is safe whenever a password EXISTS or we unlocked this session — cross-session
-      // by design, so a fresh session can re-lock a device left unprotected earlier.
-      relock: ST && (s.unlocked || s.protected === true),
-      abort: true,
-      decfile: true,
-      copylog: true,
-      dllog: true,
-      clearlog: true,
-    };
+    const { enabled, next } = buttonEnablement(s);
     document.querySelectorAll<HTMLButtonElement>('button[id]').forEach((b) => {
-      if (b.id in en) b.disabled = !en[b.id];
+      if (b.id in enabled) b.disabled = !enabled[b.id as keyof typeof enabled];
     });
-    let next: string | null = null;
-    if (!C) next = 'connect';
-    else if (!s.stopped) next = 'stop';
-    else if (s.protected === true && !s.unlocked) next = 'unlock';
-    else if (!s.dumped) next = 'decode';
-    else if (s.unlocked) next = 'relock';
     document.querySelectorAll('button').forEach((b) => b.classList.toggle('next', b.id === next && !b.disabled));
   }
   app.store.subscribe(render);

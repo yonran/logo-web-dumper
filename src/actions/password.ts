@@ -7,10 +7,10 @@ import { ascii, hex } from '../util/hex.js';
 import { ensureStopped } from './common.js';
 
 /**
- * Documented recovery: lower protection (write 0x00FF4740=0), re-negotiate, then read the
- * cleartext password back. On the 0BA6.ES10 (fw V1.07.07) this returns all-zero — see the
- * lab notebook. Inserts a Restart between the write and the read (the deviation the no-reneg
- * variant below tests).
+ * The recovery documented in PROTOCOL.md §3.4 (from brickpool's LogoPG.cpp SetSessionPassword):
+ * lower protection (write 0x00FF4740=0), re-negotiate, then read the cleartext password back. On
+ * the 0BA6.ES10 (fw V1.07.07) this returns all-zero — see LAB-NOTEBOOK.md. Inserts a Restart
+ * between the write and the read (the deviation the no-reneg variant below tests).
  */
 export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   const conn = await ensureStopped(app);
@@ -29,7 +29,7 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
     app.log('Magic bytes unexpected (0x' + g1.toString(16) + '/0x' + g2.toString(16) + '); aborting BEFORE any write.', 'err');
     return;
   }
-  app.log('Password is set (magic bytes OK). Beginning documented unlock — THIS WRITES to the PLC protection register 0x00FF4740.', 'mut');
+  app.log('Password is set (magic bytes OK). Beginning the recovery write (PROTOCOL.md §3.4) — THIS WRITES to the PLC protection register 0x00FF4740.', 'mut');
   // The single write: lower protection to level 1 (no protection). Reversible with Re-lock.
   await conn.writeByte(ADDR.PL_LEVEL1, 0x00);
   // Record unprotected state immediately so the Re-lock warning prints no matter what fails.

@@ -23,11 +23,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       # --ignore-scripts: no package postinstall runs (supply-chain hardening).
       - run: npm ci --ignore-scripts
       - run: npm run lint
+      - run: npm test
       - run: npm run build
       - name: Assemble _site (static files + compiled dist)
         run: |
