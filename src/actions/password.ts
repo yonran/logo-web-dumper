@@ -21,12 +21,18 @@ function passwordString(pw: Uint8Array): string {
 // stored bytes. This reverses it. (Not a cipher — no key material beyond this hardcoded string.)
 const SIMPLE_KEY = 'protect customer';
 
-/** Decode a `SymmetricalSimpleEncoding`-obfuscated password store (newer 0BA6 firmware). */
+/**
+ * Decode a `SymmetricalSimpleEncoding`-obfuscated password store (newer 0BA6 firmware).
+ * The key is applied POSITION-WISE, so the store must be read up to the first terminator (0x00),
+ * not with zeros filtered out — filtering would shift every later byte onto the wrong key position.
+ * (Matches LSC / passwordString, which stop at the first zero.)
+ */
 export function simpleDecode(raw: Uint8Array): string {
-  const nz = [...raw].filter((b) => b !== 0);
+  const end = raw.indexOf(0);
+  const bytes = end >= 0 ? raw.slice(0, end) : raw;
   let out = '';
-  for (let i = 0; i < nz.length; i++) {
-    const c = (nz[i] ^ SIMPLE_KEY.charCodeAt(i) ^ 0xff) & 0xff;
+  for (let i = 0; i < bytes.length; i++) {
+    const c = (bytes[i] ^ SIMPLE_KEY.charCodeAt(i) ^ 0xff) & 0xff;
     out += c >= 32 && c < 127 ? String.fromCharCode(c) : '·';
   }
   return out;
@@ -114,13 +120,23 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
     app.log('Verifying read access to the program area…', 'mut');
     const test = await conn.readRegion(conn.mem.programBase, 16, 'program probe');
     let nz = 0;
-    for (const d of test) if (d) nz++;
-    if (nz > 0 || pw2nz) {
+    let nff = 0;
+    for (const d of test) {
+      if (d) nz++;
+      if (d === 0xff) nff++;
+    }
+    // "Opened" means the PROGRAM reads back credible data — NOT that the password store was
+    // readable (pw2nz). Those are separate: a device can leak its password yet still hold the
+    // program. An all-0xFF probe is erased/unmapped, not real program data, so it is not "open".
+    const programReadable = nz > 0 && nff !== test.length;
+    if (programReadable) {
       opened = true;
-      app.log('Read access OPEN — ' + addr8(conn.mem.programBase) + ' returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & decode”.', 'ok');
+      app.log('Read access OPEN — ' + addr8(conn.mem.programBase) + ' returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & save”.', 'ok');
+    } else if (nff === test.length) {
+      app.log('Program probe at ' + addr8(conn.mem.programBase) + ' is all 0xFF — erased/empty or the wrong memory map for ' + conn.deviceName + '. Read access to the PROGRAM is NOT confirmed' + (pw2nz ? ' (the password store WAS readable, but that does not prove program access).' : '.'), 'err');
     } else {
-      app.log('Still all zero after writing 0x00FF4800 = 0 — the corrected clear register did not open reads either.', 'err');
-      app.log('This is the FIRST time the register LOGO!Soft actually uses (0x4800) was tried on this device. If it still holds, the 0BA6.ES10 (fw V1.07.07) genuinely enforces read protection. Options: power-cycle then retry; otherwise the program may only be recoverable from an original .lsc source.', 'mut');
+      app.log('Program probe still all zero after writing 0x00FF4800 = 0 — the clear register did not open program reads' + (pw2nz ? ', even though the password store was readable' : '') + '.', 'err');
+      app.log('If this persists on real hardware, the firmware genuinely holds read protection. Options: power-cycle then retry; otherwise the program may only be recoverable from an original .lsc source.', 'mut');
     }
   } finally {
     app.store.set({ unlocked: opened });
@@ -134,9 +150,15 @@ export async function relock(app: App): Promise<void> {
   if (!conn) return;
   await conn.writeByte(ADDR.PL_SET, 0x00);
   const chk = await conn.readByte(ADDR.PWD_EXISTS);
+  // 0x48FF only reports that a password EXISTS, not that read-protection is currently ACTIVE — the
+  // device exposes no register for the protection LEVEL. So we can confirm the write was ACK'd and
+  // that a password is still present, but NOT independently verify that protection is now enforced.
+  app.log('Re-lock command sent (wrote 0x00FF4801 = 0) and ACK\'d by the device.', isPasswordSet(chk) ? 'ok' : 'err');
   app.log(
-    'Re-locked (wrote 0x00FF4801 = 0). Password byte @48FF = 0x' + chk.toString(16) + (isPasswordSet(chk) ? ' (password protection restored).' : ' (unexpected — protection may not be active).'),
-    isPasswordSet(chk) ? 'ok' : 'err',
+    'Password @48FF = 0x' + chk.toString(16) + (isPasswordSet(chk)
+      ? ' — a password still exists. NOTE: 0x48FF cannot report the protection LEVEL, so active read-protection cannot be independently verified here; trust the ACK, or re-read the program to confirm it now returns zeros.'
+      : ' — UNEXPECTED: no password present after the set-protection write; protection is NOT restored.'),
+    isPasswordSet(chk) ? 'mut' : 'err',
   );
   app.log('Note: 0x4801 is LOGO!Soft\'s set-protection register (paired with the 0x4800 clear). The stored password is untouched.', 'mut');
   app.store.set({ unlocked: false, protected: isPasswordSet(chk) });

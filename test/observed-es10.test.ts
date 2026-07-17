@@ -119,7 +119,7 @@ test('unlock with the corrected 0x4800 write still does not take on the ES10 mod
   const h = makeHarness(ES10);
   await recoverPasswordAndUnlock(h.app);
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00)); // the CORRECTED clear write (0x4800)
-  assert.ok(logged(h.logger, 'Still all zero after writing 0x00FF4800'));
+  assert.ok(logged(h.logger, 'did not open program reads'));
 });
 
 test('regression: after a failed unlock, decode BLOCKS instead of reading a protected device', async () => {

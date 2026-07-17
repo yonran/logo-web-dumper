@@ -40,7 +40,7 @@ test('0BA5 reads the program at the bare 2-byte 0x0EE8', async () => {
 });
 
 test('0BA5 leaking device: full unlock recovers the cleartext and opens the program', async () => {
-  const h = makeHarness({ identNo: 0x42, passwordExists: true, leaksCleartext: true, password: 'ba5pw', program: new Uint8Array(8).fill(0x33) });
+  const h = makeHarness({ identNo: 0x42, passwordExists: true, leaksCleartext: true, clearWriteUnlocks: true, password: 'ba5pw', program: new Uint8Array(8).fill(0x33) });
   await recoverPasswordAndUnlock(h.app);
   assert.equal(h.conn.deviceName, '0BA5');
   assert.ok(logged(h.logger, 'ba5pw'));

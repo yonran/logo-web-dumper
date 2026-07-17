@@ -39,7 +39,7 @@ test('unlock on a non-leaking ES10: writes 0x4800 but reads stay zero → does n
   // The CORRECTED clear register (0x4800), not the old 0x4740.
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
   assert.equal(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00), false);
-  assert.ok(logged(h.logger, 'Still all zero after writing 0x00FF4800'));
+  assert.ok(logged(h.logger, 'did not open program reads'));
 });
 
 test('simpleDecode reverses the "protect customer" XOR obfuscation', () => {
@@ -72,19 +72,28 @@ test('unlock does NOTHING if the operator cancels the verify prompt', async () =
   assert.ok(logged(h.logger, 'Aborted at the verify prompt'));
 });
 
-test('a successful unlock DOES set unlocked=true (leaking device)', async () => {
+test('a successful unlock DOES set unlocked=true (clear write opens the program)', async () => {
   const prog = new Uint8Array(16).fill(0x5a);
-  const h = makeHarness({ passwordExists: true, leaksCleartext: true, password: 'pw', program: prog });
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, clearWriteUnlocks: true, password: 'pw', program: prog });
   await recoverPasswordAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, true);
 });
 
 test('unlock on a leaking device: cleartext recovered and program readable', async () => {
   const prog = new Uint8Array(16).fill(0xab);
-  const h = makeHarness({ passwordExists: true, leaksCleartext: true, password: 'letmein', program: prog });
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, clearWriteUnlocks: true, password: 'letmein', program: prog });
   await recoverPasswordAndUnlock(h.app);
   assert.ok(logged(h.logger, 'letmein'));
   assert.ok(logged(h.logger, 'Read access OPEN'));
+});
+
+test('a readable password but a HELD program does NOT count as unlocked', async () => {
+  // The distinguishing case: the password store leaks, but the clear write does not open the
+  // program (clearWriteUnlocks:false). Program access — not password readability — defines unlocked.
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, clearWriteUnlocks: false, password: 'pw', program: new Uint8Array(16).fill(0x5a) });
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, false);
+  assert.ok(logged(h.logger, 'did not open program reads'));
 });
 
 test('unlock aborts before any write when no password is set', async () => {
