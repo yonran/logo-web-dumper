@@ -26,6 +26,29 @@ Siemens' LOGO!Soft Comfort *Demo* can't transfer programs (the Transfer menu is 
 - The USB-serial chip drivers for the WebUSB (Android) path (CP210x / CH340 / FTDI) are best-effort and untested on all silicon; the desktop Web Serial path is robust.
 - **Requires STOP mode** on the device for memory reads.
 
+## Development
+
+The app is TypeScript in `src/`, compiled to ES modules in `dist/` (no bundler; the browser
+loads the modules natively). `index.html` references `./dist/main.js`.
+
+```sh
+npm install --ignore-scripts   # dev deps only (typescript, eslint); no runtime deps
+npm run typecheck              # tsc --noEmit
+npm run lint                   # eslint (js + typescript-eslint recommendedTypeChecked)
+npm run build                 # tsc → dist/
+```
+
+To run locally, build and serve the repo root over HTTP (module scripts need `http(s)://`, not
+`file://`), e.g. `python3 -m http.server` then open `http://localhost:8000/`.
+
+Module layout: `transport/` (Web Serial + WebUSB byte pipes) → `pg/` (the `Connection` class,
+which owns the transport and is the only thing that speaks the PG protocol) → `actions/`
+(operations that orchestrate a Connection + the `state/` store) → `ui/` (DOM wiring). Protocol
+and program-format facts live in `PROTOCOL.md`; the investigation log is `LAB-NOTEBOOK.md`.
+
+Deployment is automatic: pushing to `main` runs `.github/workflows/pages.yml`, which builds and
+publishes to GitHub Pages. `dist/` is not committed.
+
 ## Sources & credits
 
 Siemens does not publicly document the PG protocol or the program format; everything here rests on community reverse-engineering. Full annotated documentation with per-fact citations is in **[PROTOCOL.md](PROTOCOL.md)**.

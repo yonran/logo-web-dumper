@@ -1,0 +1,24 @@
+{
+  "name": "logo-web-dumper",
+  "version": "1.0.0",
+  "description": "Read & decode a Siemens LOGO! 0BA6 program in the browser (Web Serial / WebUSB)",
+  "license": "Unlicense",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/w3c-web-serial": "^1.0.7",
+    "@types/w3c-web-usb": "^1.0.10",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.21.0"
+  }
+}
