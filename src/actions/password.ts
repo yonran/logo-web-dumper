@@ -118,25 +118,35 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
     const pw2nz = [...pw2].some((b) => b);
     app.log('Password area @0x00000566 (after clear): ' + (pw2nz ? '"' + passwordString(pw2) + '"  raw ' + hex(pw2) : 'still all zero'), pw2nz ? 'ok' : 'err');
     app.log('Verifying read access to the program area…', 'mut');
-    const test = await conn.readRegion(conn.mem.programBase, 16, 'program probe');
+    // LSC's Memory.upload reads the program via READ BLOCK (0x05), not Read Byte. Try that at the
+    // correct 0BA6 program address FIRST — our only earlier block rejection was ILLEGAL ACCESS
+    // (0x03) at the WRONG 0BA4 address (0x00FF0EE8), not "block reads unsupported". Then also probe
+    // with Read Byte for comparison, so the log shows exactly which path (if any) opened.
+    const blk = await conn.readBlock(conn.mem.programBase, 16, 'program Read Block probe');
+    const test = await conn.readRegion(conn.mem.programBase, 16, 'program Read Byte probe');
     let nz = 0;
     let nff = 0;
     for (const d of test) {
       if (d) nz++;
       if (d === 0xff) nff++;
     }
-    // "Opened" means the PROGRAM reads back credible data — NOT that the password store was
-    // readable (pw2nz). Those are separate: a device can leak its password yet still hold the
-    // program. An all-0xFF probe is erased/unmapped, not real program data, so it is not "open".
-    const programReadable = nz > 0 && nff !== test.length;
-    if (programReadable) {
+    const blkNz = blk ? [...blk].filter((b) => b).length : 0;
+    const blkAllFf = blk ? blk.every((b) => b === 0xff) : false;
+    // "Opened" means the PROGRAM reads back credible data via SOME command — NOT that the password
+    // store was readable (pw2nz). All-0x00 = protected; all-0xFF = erased/unmapped/wrong address.
+    const byteReadable = nz > 0 && nff !== test.length;
+    const blockReadable = blk !== null && blkNz > 0 && !blkAllFf;
+    if (blockReadable && blk) {
       opened = true;
-      app.log('Read access OPEN — ' + addr8(conn.mem.programBase) + ' returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & save”.', 'ok');
-    } else if (nff === test.length) {
-      app.log('Program probe at ' + addr8(conn.mem.programBase) + ' is all 0xFF — erased/empty or the wrong memory map for ' + conn.deviceName + '. Read access to the PROGRAM is NOT confirmed' + (pw2nz ? ' (the password store WAS readable, but that does not prove program access).' : '.'), 'err');
+      app.log('✅ Read access OPEN via Read Block — ' + addr8(conn.mem.programBase) + ' returned real data (' + blkNz + '/16 non-zero: ' + hex(blk) + '). Run “4 · Read program & save”.', 'ok');
+    } else if (byteReadable) {
+      opened = true;
+      app.log('✅ Read access OPEN via Read Byte — ' + addr8(conn.mem.programBase) + ' returned real data (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & save”.', 'ok');
+    } else if (blk === null) {
+      app.log('Program read NOT opened: Read Block was rejected (see NOK code above — 0x03 = illegal access ⇒ still the wrong address; other codes ⇒ still protected) and Read Byte returned ' + (nff === test.length ? 'all 0xFF' : 'all zero') + '.', 'err');
+      app.log('If Read Block gave 0x03 illegal-access, the program base may still be off; if it is another NOK or all-zero, the firmware is still holding read protection.', 'mut');
     } else {
-      app.log('Program probe still all zero after writing 0x00FF4800 = 0 — the clear register did not open program reads' + (pw2nz ? ', even though the password store was readable' : '') + '.', 'err');
-      app.log('If this persists on real hardware, the firmware genuinely holds read protection. Options: power-cycle then retry; otherwise the program may only be recoverable from an original .lsc source.', 'mut');
+      app.log('Program read NOT opened after the 0x4800 write — neither Read Byte nor Read Block returned real data' + (pw2nz ? ', even though the password store was readable' : '') + '.', 'err');
     }
   } finally {
     app.store.set({ unlocked: opened });

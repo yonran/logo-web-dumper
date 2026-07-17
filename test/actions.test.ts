@@ -39,7 +39,7 @@ test('unlock on a non-leaking ES10: writes 0x4800 but reads stay zero → does n
   // The CORRECTED clear register (0x4800), not the old 0x4740.
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
   assert.equal(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00), false);
-  assert.ok(logged(h.logger, 'did not open program reads'));
+  assert.ok(logged(h.logger, 'Program read NOT opened'));
 });
 
 test('simpleDecode reverses the "protect customer" XOR obfuscation', () => {
@@ -93,7 +93,7 @@ test('a readable password but a HELD program does NOT count as unlocked', async 
   const h = makeHarness({ passwordExists: true, leaksCleartext: true, clearWriteUnlocks: false, password: 'pw', program: new Uint8Array(16).fill(0x5a) });
   await recoverPasswordAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, false);
-  assert.ok(logged(h.logger, 'did not open program reads'));
+  assert.ok(logged(h.logger, 'Program read NOT opened'));
 });
 
 test('unlock aborts before any write when no password is set', async () => {

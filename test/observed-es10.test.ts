@@ -119,7 +119,7 @@ test('unlock with the corrected 0x4800 write still does not take on the ES10 mod
   const h = makeHarness(ES10);
   await recoverPasswordAndUnlock(h.app);
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00)); // the CORRECTED clear write (0x4800)
-  assert.ok(logged(h.logger, 'did not open program reads'));
+  assert.ok(logged(h.logger, 'Program read NOT opened'));
 });
 
 test('regression: after a failed unlock, decode BLOCKS instead of reading a protected device', async () => {
@@ -147,6 +147,23 @@ test('0BA6 read pulls the program image from the Logo6 map (0x00FF2FAA), not the
   // No decoder for 0BA6 yet, but the raw bytes are captured and the dump is marked done.
   assert.ok(logged(h.logger, 'Raw program image captured') || logged(h.logger, 'No netlist decoder'));
   assert.equal(h.store.get().dumped, true);
+});
+
+test('unlock reports OPEN via Read Block when Read Block returns program data', async () => {
+  // The path LSC uses (Memory.upload → Read Block 0x05). When the device accepts Read Block and the
+  // clear write opens the program, the unlock probe must recognise it and report it via Read Block.
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, program: new Uint8Array(16).fill(0x33) });
+  await recoverPasswordAndUnlock(h.app);
+  assert.ok(logged(h.logger, 'OPEN via Read Block'));
+  assert.equal(h.store.get().unlocked, true);
+});
+
+test('unlock: ES10 rejects Read Block AND Read Byte stays zero → not opened', async () => {
+  // The real ES10 so far: Read Block rejected, Read Byte all-zero. Must NOT report opened.
+  const h = makeHarness(ES10); // blockReadsWork:false, clearWriteUnlocks:false
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, false);
+  assert.ok(logged(h.logger, 'Program read NOT opened'));
 });
 
 // ---- counterfactual: the SAME flow recovers on a leaking device, proving the fake and the

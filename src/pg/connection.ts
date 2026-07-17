@@ -274,6 +274,54 @@ export class Connection {
     return out;
   }
 
+  /**
+   * Read Block `0x05`: `05 <addr…> <countHi> <countLo>` → `06` then `count` data bytes then a
+   * 1-byte XOR checksum. This is how LSC's `Memory.upload` reads the program image. On the
+   * 0BA6.ES10 an EARLIER attempt was rejected `06 15 03` — but that was at the WRONG (0BA4) address
+   * `0x00FF0EE8`, i.e. ILLEGAL ACCESS to an unmapped region, not "block reads unsupported". Returns
+   * the data on success, or null (with a logged reason) on any rejection/short read.
+   */
+  async readBlock(addr: number, count: number, label = 'Read Block'): Promise<Uint8Array | null> {
+    const cmd = new Uint8Array([OP.READ_BLOCK, ...encodeAddr(this.device, addr), (count >> 8) & 0xff, count & 0xff]);
+    await this.xport.read(4096, 60);
+    await this.xport.write(cmd);
+    const t0 = await this.xport.read(1, 2000);
+    this.logger.log('→ ' + hex(cmd) + '   ← ' + (t0.length ? hex(t0) : '(nothing)') + '   (' + label + ' ' + addr8(addr) + ', ' + count + ' bytes)', t0.length && t0[0] === OP.ACK ? 'mut' : 'err');
+    if (!t0.length) {
+      await this.recover();
+      return null;
+    }
+    if (t0[0] === OP.NOK) {
+      const e = await this.xport.read(1, 900);
+      this.logger.log('  ' + label + ' rejected: NOK 15 ' + hex(e) + (e.length ? '  ' + cpuErrText(e[0]) : ''), 'err');
+      await this.recover();
+      return null;
+    }
+    if (t0[0] !== OP.ACK) {
+      this.logger.log('  ' + label + ' unexpected first byte ' + hex(t0), 'err');
+      await this.recover();
+      return null;
+    }
+    const data = await this.xport.read(count, 12000);
+    if (data.length < count) {
+      // The observed ES10 failure: 06 (pre-parse ACK) THEN 15 03 in the data stream.
+      if (data.length >= 2 && data[0] === OP.NOK) {
+        this.logger.log('  ' + label + ' → 06 then NOK 15 ' + data[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(data[1]), 'err');
+      } else {
+        this.logger.log('  ' + label + ' → short read ' + data.length + '/' + count + ': ' + hex(data.slice(0, 24)), 'err');
+      }
+      await this.recover();
+      return null;
+    }
+    const cs = await this.xport.read(1, 1500);
+    let x = 0;
+    for (const d of data) x ^= d;
+    const ok = cs.length > 0 && cs[0] === x;
+    this.logger.log('  ' + label + ' → OK, ' + data.length + ' bytes, XOR ' + (ok ? 'valid' : 'MISMATCH (got ' + hex(cs) + ', want 0x' + x.toString(16) + ')'), ok ? 'ok' : 'err');
+    await this.xport.read(4096, 60);
+    return data;
+  }
+
   /** Operating mode: `55 17 17 AA` → `06 <mode>`. Returns the mode byte; logs the meaning. */
   async getMode(): Promise<number> {
     await this.xport.read(4096, 50);
