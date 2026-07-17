@@ -30,6 +30,12 @@ export interface ProgramMap {
   readonly regions: readonly ProgramRegion[];
   /** Wire address of the program BODY — used for the post-unlock probe and the raw-dump default. */
   readonly programBase: number;
+  /**
+   * Which command reads the image. The 0BA6 program region is BLOCK-read-only: Read Byte returns
+   * 0x00 there, only Read Block (0x05) returns the real bytes (confirmed on ES10 hardware). The
+   * legacy 0BA4/0BA5 layout is read byte-wise.
+   */
+  readonly readMode: 'byte' | 'block';
   /** How to turn the concatenated image into a netlist. */
   readonly decode: 'legacy2460' | 'raw';
 }
@@ -42,6 +48,7 @@ const MAP_LEGACY: ProgramMap = {
     { base: 0x00000ee8, len: 2000, name: 'program' },
   ],
   programBase: 0x00000ee8,
+  readMode: 'byte',
   decode: 'legacy2460',
 };
 
@@ -54,6 +61,7 @@ const MAP_LEGACY: ProgramMap = {
 const MAP_0BA6: ProgramMap = {
   regions: [{ base: 0x00002faa, len: 13464, name: 'program image (offset table + wiring + program)' }],
   programBase: 0x00003292,
+  readMode: 'block', // the program region only answers Read Block (0x05), not Read Byte — verified on ES10
   decode: 'raw',
 };
 

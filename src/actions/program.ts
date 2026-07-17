@@ -30,10 +30,14 @@ export async function readAllAndDecode(app: App): Promise<void> {
   // 0BA5/0BA4 the low legacy layout) — reading the wrong family's addresses returns 0xFF/0x00.
   const mem = conn.mem;
   const total = mem.regions.reduce((n, r) => n + r.len, 0);
-  app.log('Reading the program image for ' + conn.deviceName + ' (' + total + ' bytes via Read Byte, ~' + Math.round(total / 30) + 's)…', 'mut');
+  const via = mem.readMode === 'block' ? 'Read Block (0x05)' : 'Read Byte (0x02)';
+  const est = mem.readMode === 'block' ? Math.round(total / 900) : Math.round(total / 30);
+  app.log('Reading the program image for ' + conn.deviceName + ' (' + total + ' bytes via ' + via + ', ~' + est + 's)…', 'mut');
   app.log('Press “Abort” to stop.', 'mut');
   const parts: Uint8Array[] = [];
-  for (const r of mem.regions) parts.push(await conn.readRegion(r.base, r.len, r.name));
+  for (const r of mem.regions) {
+    parts.push(mem.readMode === 'block' ? await conn.readRegionViaBlock(r.base, r.len, r.name) : await conn.readRegion(r.base, r.len, r.name));
+  }
   const full = new Uint8Array(total);
   for (let i = 0, o = 0; i < parts.length; o += parts[i].length, i++) full.set(parts[i], o);
   // Classify suspicious captures, but save them: uniform data is useful diagnostic evidence.

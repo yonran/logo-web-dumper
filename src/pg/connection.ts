@@ -279,6 +279,35 @@ export class Connection {
   }
 
   /**
+   * Region read via Read Block, in chunks. The 0BA6 program region is block-read-only (Read Byte
+   * returns 0x00), so this is the real dump path for it. A rejected block latches the session, so on
+   * failure we stop and return what we have (zero-filled tail) rather than risk churning recovery.
+   * Honours `abort`.
+   */
+  async readRegionViaBlock(addr: number, count: number, label: string, chunk = 512): Promise<Uint8Array> {
+    const out = new Uint8Array(count);
+    const t0 = Date.now();
+    for (let off = 0; off < count; off += chunk) {
+      if (this.abort) {
+        this.logger.log('  aborted at ' + off + '/' + count, 'err');
+        throw new Error('aborted');
+      }
+      const n = Math.min(chunk, count - off);
+      const data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
+      if (!data) {
+        this.logger.log('  ' + label + ': Read Block failed at offset ' + off + ' — stopping; ' + off + '/' + count + ' bytes captured (rest zero-filled).', 'err');
+        break;
+      }
+      out.set(data, off);
+      const pct = Math.round(((off + n) / count) * 100);
+      const el = (Date.now() - t0) / 1000;
+      this.logger.log('  ' + label + ': ' + (off + n) + '/' + count + ' bytes (' + pct + '%), ' + el.toFixed(0) + 's elapsed', 'mut');
+    }
+    this.logger.log('  ' + label + ': read via Read Block (' + chunk + '-byte chunks).', 'ok');
+    return out;
+  }
+
+  /**
    * Read Block `0x05`: `05 <addr…> <countHi> <countLo>` → `06` then `count` data bytes then a
    * 1-byte XOR checksum. This is how LSC's `Memory.upload` reads the program image. On the
    * 0BA6.ES10 an EARLIER attempt was rejected `06 15 03` — but that was at the WRONG (0BA4) address

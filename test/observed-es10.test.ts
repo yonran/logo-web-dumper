@@ -134,13 +134,13 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
   assert.equal(h.store.get().dumped, false);
 });
 
-test('0BA6 read pulls the program image from the Logo6 map (bare 0x00002FAA), not the 0BA4 0x0EE8', async () => {
-  const h = makeHarness({ ...ES10, passwordExists: false, program: new Uint8Array(16).fill(0x5a) }); // unprotected → readable
+test('0BA6 read pulls the program image via Read Block from the bare Logo6 map (0x00002FAA)', async () => {
+  const h = makeHarness({ ...ES10, passwordExists: false, blockReadsWork: true, program: new Uint8Array(16).fill(0x5a) }); // unprotected → readable
   await readAllAndDecode(h.app);
-  // The image read addresses the 0BA6 offset-table base BARE 0x00002FAA (00 00 2f aa) — Memory reads
-  // aren't paged, so this is 0x0000____, not the 0x00FF____ of the symbolic register reads.
-  const imgRead = h.device.writes.find((w) => w[0] === 0x02 && w[2] === 0x00 && w[3] === 0x2f && w[4] === 0xaa);
-  assert.ok(imgRead, 'reads the 0BA6 image base 0x00002FAA');
+  // The 0BA6 program region is BLOCK-read-only, so the image is read via Read Block (0x05) at the
+  // BARE offset-table base 0x00002FAA (00 00 2f aa) — Memory reads aren't paged.
+  const imgRead = h.device.writes.find((w) => w[0] === 0x05 && w[1] === 0x00 && w[2] === 0x00 && w[3] === 0x2f && w[4] === 0xaa);
+  assert.ok(imgRead, 'reads the 0BA6 image base 0x00002FAA via Read Block');
   // The full 13464-byte image is saved, with the program body at offset 0x3292-0x2FAA = 744.
   assert.equal(h.ui.downloads.length, 1);
   assert.equal(h.ui.downloads[0].bytes.length, 13464);
@@ -159,7 +159,7 @@ test('unlock keeps the verified byte-read session instead of risking a rejected 
 });
 
 test('full read preserves the session that was successfully unlocked', async () => {
-  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, program: new Uint8Array(512).fill(0x44) });
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, program: new Uint8Array(512).fill(0x44) });
   await recoverPasswordAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, true);
   const reconnectsBefore = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
