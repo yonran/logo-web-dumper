@@ -30,6 +30,7 @@ export interface FakeDeviceConfig {
   password?: string; // stored cleartext (≤10 chars)
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
+  flakyReads?: number; // drop the response to the first N Read Byte commands (transient glitch)
 }
 
 // LSC SymmetricalSimpleEncoding key — ground truth, defined independently of the tool's decoder.
@@ -46,6 +47,7 @@ export class FakeDevice implements Transport {
   private mode: number;
   private latched = false; // after an exception, everything NOKs until Restart
   private protectionLowered = false;
+  private flakyLeft: number;
   private readonly addrWidth: 2 | 4;
   private readonly cfg: Required<Pick<FakeDeviceConfig, 'identNo' | 'passwordExists' | 'leaksCleartext' | 'blockReadsWork'>> &
     FakeDeviceConfig;
@@ -63,6 +65,7 @@ export class FakeDevice implements Transport {
     };
     this.addrWidth = this.cfg.identNo === 0x42 ? 2 : 4;
     this.mode = config.mode ?? 0x42;
+    this.flakyLeft = config.flakyReads ?? 0;
 
     // System registers — always readable, keyed by the wire address for this device.
     this.sys.set(this.wire(BASE.PWD_MAGIC1), 0x04);
@@ -159,6 +162,11 @@ export class FakeDevice implements Transport {
       return;
     }
     if (op === 0x02) {
+      // Simulate a transient line glitch: drop the response entirely so the tool times out & retries.
+      if (this.flakyLeft > 0) {
+        this.flakyLeft--;
+        return;
+      }
       // Read Byte → ACK, 0x03, echoed address (width bytes), value. Never faults.
       const value = this.readMem(this.addr(cmd));
       const echo = [...cmd.slice(1, 1 + w)];

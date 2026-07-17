@@ -43,6 +43,12 @@ export const ADDR = {
 
 export const PWD_EXISTS_YES = 0x40;
 
+// LSC's isPWProtected treats ANY nonzero byte at 0x48FF as "password set" (`readByte(0x48FF) > 0`),
+// not exactly 0x40 — so a device reporting a different nonzero flag isn't misread as unprotected.
+export function isPasswordSet(flag: number): boolean {
+  return flag !== 0;
+}
+
 /** CPU exception codes carried in a NOK (0x15) response. Source: LogoPG.cpp CpuError(). */
 export const CPU_ERR: Record<number, string> = {
   0x01: 'Device busy — LOGO! cannot accept a telegram right now',
@@ -61,6 +67,15 @@ export const MODES: Record<number, string> = {
   0x42: 'STOP',
 };
 export const MODE_STOP = 0x42;
+
+// The mode byte is a bitfield (LSC's TS_* flags), not an enum. STOP is bit 0x02; the observed
+// 0x42 is TS_REMOTE|TS_STOP. Test the bit, not equality, so STOP with other status bits set
+// (error 0x08, first-cycle 0x80, non-remote) isn't misread as "not in STOP".
+export const TS_RUN = 0x01;
+export const TS_STOP = 0x02;
+export function isStopMode(m: number): boolean {
+  return (m & TS_STOP) !== 0;
+}
 
 /** IdentNo → device name (from the `0x21` connect reply). */
 export const IDENT_NAMES: Record<number, string> = {

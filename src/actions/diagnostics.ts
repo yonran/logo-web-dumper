@@ -2,7 +2,7 @@
 // program-name self-test, and a raw region dump.
 
 import type { App } from '../app.js';
-import { ADDR, OP, PWD_EXISTS_YES } from '../pg/constants.js';
+import { ADDR, OP, isPasswordSet } from '../pg/constants.js';
 import { ascii } from '../util/hex.js';
 import { downloadBytes } from '../util/dom.js';
 import { ensureStopped } from './common.js';
@@ -34,7 +34,7 @@ export async function checkPassword(app: App): Promise<number> {
   app.log(
     'Password byte @0x00FF48FF = 0x' +
       p.toString(16).padStart(2, '0') +
-      (p === PWD_EXISTS_YES
+      (isPasswordSet(p)
         ? '  → A PASSWORD IS SET. Read protection would explain empty/blocked program reads.'
         : p === 0x00
           ? '  → no password set.'
@@ -44,7 +44,7 @@ export async function checkPassword(app: App): Promise<number> {
   const m1 = await conn.readByte(ADDR.PWD_MAGIC1);
   const m2 = await conn.readByte(ADDR.PWD_MAGIC2);
   app.log('Password magic @1F00/1F01 = 0x' + m1.toString(16) + '/0x' + m2.toString(16) + '  (expected 0x04/0x00 per PROTOCOL.md §3.4)', m1 === 0x04 && m2 === 0x00 ? 'ok' : 'mut');
-  app.store.set({ protected: p === PWD_EXISTS_YES });
+  app.store.set({ protected: isPasswordSet(p) });
   return p;
 }
 

@@ -2,7 +2,7 @@
 
 import type { App } from '../app.js';
 import { Connection } from '../pg/connection.js';
-import { ADDR, MODE_STOP, PWD_EXISTS_YES } from '../pg/constants.js';
+import { ADDR, isStopMode, isPasswordSet } from '../pg/constants.js';
 import { openTransport, resolveMode, transportCaps } from '../transport/connect.js';
 import type { TransportMode } from '../transport/types.js';
 
@@ -61,7 +61,7 @@ export async function doCheckMode(app: App): Promise<void> {
   const conn = app.requireConn();
   await conn.connect();
   const m = await conn.getMode();
-  app.store.set({ stopped: m === MODE_STOP });
+  app.store.set({ stopped: isStopMode(m) });
 }
 
 /** Force STOP, then learn the protection state so unlock/re-lock enable correctly. */
@@ -70,22 +70,22 @@ export async function doStop(app: App): Promise<void> {
   await conn.connect();
   await conn.sendStop();
   const m = await conn.getMode();
-  app.store.set({ stopped: m === MODE_STOP });
-  if (m !== MODE_STOP) return;
+  app.store.set({ stopped: isStopMode(m) });
+  if (!isStopMode(m)) return;
   const p = await conn.readByte(ADDR.PWD_EXISTS);
-  app.store.set({ protected: p === PWD_EXISTS_YES });
+  app.store.set({ protected: isPasswordSet(p) });
   app.log(
     'Password ' +
-      (p === PWD_EXISTS_YES
+      (isPasswordSet(p)
         ? 'IS set (0x48FF=0x40) — use step 3 to unlock, step 5 to re-lock.'
         : 'is not set (0x48FF=0x' + p.toString(16) + ').'),
-    p === PWD_EXISTS_YES ? 'mut' : 'ok',
+    isPasswordSet(p) ? 'mut' : 'ok',
   );
   // Reversibility across refresh/reconnect: 0x48FF reports only that a password EXISTS, not
   // the current protection LEVEL. So we CANNOT tell from the device whether an unlock earlier
   // this session — or in a previous session / before a page refresh — left it at level 1
   // (unprotected). Make that unknowable-state explicit rather than pretend it's re-locked.
-  if (p === PWD_EXISTS_YES) {
+  if (isPasswordSet(p)) {
     app.log(
       'Note: the device can report that a password exists but NOT the current protection level. If you (or an earlier session/refresh) ran an unlock, this LOGO! may still be UNPROTECTED right now — press “5 · Re-lock” to be certain. Re-lock works cross-session.',
       'err',

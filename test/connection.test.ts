@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Connection } from '../src/pg/connection.js';
 import { Logger } from '../src/log.js';
-import { ADDR } from '../src/pg/constants.js';
+import { ADDR, isStopMode } from '../src/pg/constants.js';
 import { FakeDevice, type FakeDeviceConfig } from './helpers/fake-device.js';
 
 function make(cfg: FakeDeviceConfig = {}): { c: Connection; d: FakeDevice; l: Logger } {
@@ -13,6 +13,26 @@ function make(cfg: FakeDeviceConfig = {}): { c: Connection; d: FakeDevice; l: Lo
   const l = new Logger();
   return { c: new Connection(d, l), d, l };
 }
+
+test('readByte retries a transient no-response and then succeeds', async () => {
+  const { c, d } = make({ flakyReads: 2 }); // first 2 reads glitch, 3rd works
+  assert.equal(await c.readByte(ADDR.PWD_MAGIC1), 0x04);
+  const reads = d.writes.filter((w) => w[0] === 0x02);
+  assert.equal(reads.length, 3); // 2 failed attempts + 1 success (not just 1)
+});
+
+test('readByte gives up after 5 attempts of persistent failure', async () => {
+  const { c, d } = make({ flakyReads: 99 });
+  await assert.rejects(c.readByte(ADDR.PWD_MAGIC1));
+  assert.equal(d.writes.filter((w) => w[0] === 0x02).length, 5); // RETRIES
+});
+
+test('STOP is detected by the 0x02 bit, not exact 0x42 (e.g. 0x4A = STOP|ERROR|REMOTE)', async () => {
+  const { c } = make({ mode: 0x4a }); // 0x42 | 0x08 (error) — still STOP
+  await c.connect();
+  const m = await c.getMode();
+  assert.equal(isStopMode(m), true);
+});
 
 test('connect returns the IdentNo and names the device', async () => {
   const { c, l } = make({ identNo: 0x45 });

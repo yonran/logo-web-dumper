@@ -5,7 +5,7 @@
 // our older code inherited from brickpool). Re-lock writes 0 to 0x4801. See PROTOCOL.md §3.4.
 
 import type { App } from '../app.js';
-import { ADDR, PWD_EXISTS_YES } from '../pg/constants.js';
+import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { ascii, hex } from '../util/hex.js';
 import { ensureStopped } from './common.js';
 
@@ -42,8 +42,8 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   const conn = await ensureStopped(app);
   if (!conn) return;
   const exists = await conn.readByte(ADDR.PWD_EXISTS);
-  app.store.set({ protected: exists === PWD_EXISTS_YES });
-  if (exists !== PWD_EXISTS_YES) {
+  app.store.set({ protected: isPasswordSet(exists) });
+  if (!isPasswordSet(exists)) {
     app.log('Password byte @48FF = 0x' + exists.toString(16) + ' — no protection to recover. Skip to “4 · Read program & decode”.', 'ok');
     return;
   }
@@ -127,8 +127,8 @@ export async function recoverNoReneg(app: App): Promise<void> {
   const conn = await ensureStopped(app);
   if (!conn) return;
   const exists = await conn.readByte(ADDR.PWD_EXISTS);
-  app.store.set({ protected: exists === PWD_EXISTS_YES });
-  if (exists !== PWD_EXISTS_YES) {
+  app.store.set({ protected: isPasswordSet(exists) });
+  if (!isPasswordSet(exists)) {
     app.log('Password byte @48FF = 0x' + exists.toString(16) + ' — no protection to recover.', 'ok');
     return;
   }
@@ -169,9 +169,9 @@ export async function relock(app: App): Promise<void> {
   await conn.writeByte(ADDR.PL_SET, 0x00);
   const chk = await conn.readByte(ADDR.PWD_EXISTS);
   app.log(
-    'Re-locked (wrote 0x00FF4801 = 0). Password byte @48FF = 0x' + chk.toString(16) + (chk === PWD_EXISTS_YES ? ' (password protection restored).' : ' (unexpected — protection may not be active).'),
-    chk === PWD_EXISTS_YES ? 'ok' : 'err',
+    'Re-locked (wrote 0x00FF4801 = 0). Password byte @48FF = 0x' + chk.toString(16) + (isPasswordSet(chk) ? ' (password protection restored).' : ' (unexpected — protection may not be active).'),
+    isPasswordSet(chk) ? 'ok' : 'err',
   );
   app.log('Note: 0x4801 is LOGO!Soft\'s set-protection register (paired with the 0x4800 clear). The stored password is untouched.', 'mut');
-  app.store.set({ unlocked: false, protected: chk === PWD_EXISTS_YES });
+  app.store.set({ unlocked: false, protected: isPasswordSet(chk) });
 }

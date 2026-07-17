@@ -1,7 +1,7 @@
 // Program read + decode actions.
 
 import type { App } from '../app.js';
-import { ADDR, PWD_EXISTS_YES } from '../pg/constants.js';
+import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { decodeCombined } from '../decode/program.js';
 import { downloadBytes } from '../util/dom.js';
 import { ensureStopped } from './common.js';
@@ -16,8 +16,8 @@ export async function readAllAndDecode(app: App): Promise<void> {
   if (!conn) return;
   // Pre-flight: if protected and not yet unlocked, reads would be all zeros.
   const prot = await conn.readByte(ADDR.PWD_EXISTS);
-  app.store.set({ protected: prot === PWD_EXISTS_YES });
-  if (prot === PWD_EXISTS_YES && !app.store.get().unlocked) {
+  app.store.set({ protected: isPasswordSet(prot) });
+  if (isPasswordSet(prot) && !app.store.get().unlocked) {
     app.log('Program is PASSWORD-PROTECTED (0x00FF48FF=0x40) and not unlocked — a read would return all zeros. Press “3 · Recover password & unlock” first. Nothing read or saved.', 'err');
     return;
   }

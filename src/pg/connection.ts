@@ -6,7 +6,7 @@
 import type { Logger } from '../log.js';
 import type { Transport } from '../transport/types.js';
 import { addr8, hex } from '../util/hex.js';
-import { cpuErrText, IDENT_NAMES, MODES, MODE_STOP, OP } from './constants.js';
+import { cpuErrText, IDENT_NAMES, isStopMode, MODES, OP } from './constants.js';
 import { addrBytes as encodeAddr, ba6, BA5, profileForIdent, wireAddr, type DeviceProfile } from './device.js';
 
 /** A read/write rejected by the device. `nok` is the CPU exception code, when known. */
@@ -29,6 +29,9 @@ export interface BlockHit {
 }
 
 export class Connection {
+  /** Telegram retry count (LSC retries reads/writes 5×). */
+  private static readonly RETRIES = 5;
+
   /** Set by the Stop button to interrupt a long region read / probe. */
   abort = false;
 
@@ -122,10 +125,25 @@ export class Connection {
   }
 
   /**
-   * Read Byte `0x02`. Response echoes the address back: `06 03 <4-byte addr> <data>`, which
-   * makes it self-validating. Throws PgError on NOK.
+   * Read Byte `0x02` with retry. LSC retries the whole telegram up to 5× on any transient failure
+   * (no response, short/desynced response, echo mismatch, or a transient NOK); a single glitch at
+   * 9600 baud otherwise aborts a multi-thousand-byte dump. Deterministic rejections (illegal access
+   * 0x03, unknown command 0x05) are surfaced immediately — retrying won't change them.
    */
   async readByte(addr: number, quiet = false): Promise<number> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.readByteOnce(addr, quiet);
+      } catch (e) {
+        if (e instanceof PgError && (e.nok === 0x03 || e.nok === 0x05)) throw e;
+        if (this.abort || attempt >= Connection.RETRIES) throw e;
+        this.logger.log('  retry Read Byte ' + addr8(addr) + ' (attempt ' + (attempt + 1) + '/' + Connection.RETRIES + ')', 'mut');
+      }
+    }
+  }
+
+  /** One Read Byte attempt. Response echoes the address back (`06 03 <addr> <data>`). */
+  private async readByteOnce(addr: number, quiet = false): Promise<number> {
     const cmd = new Uint8Array([OP.READ_BYTE, ...this.addrBytes(addr)]);
     const A = addr8(addr);
     await this.xport.write(cmd);
@@ -166,12 +184,33 @@ export class Connection {
     let echo = 0;
     for (let i = 0; i < w; i++) echo = (echo << 8) | rest[1 + i];
     echo >>>= 0;
-    if (echo !== wireAddr(this.device, addr)) this.logger.log('  address echo MISMATCH: sent ' + A + ', echoed 0x' + echo.toString(16), 'err');
+    if (echo !== wireAddr(this.device, addr)) {
+      // Wrong echo = the response is for a different address (desync) — the data is unreliable.
+      // Throw so the retry re-reads (LSC treats a wrong echo as a failure).
+      await this.drain('after echo mismatch');
+      throw new Error('Read Byte ' + A + ': address echo mismatch (echoed 0x' + echo.toString(16) + ')');
+    }
     return rest[1 + w];
   }
 
-  /** Write Byte `0x01`. Response is a bare `0x06` (or `15 <code>`). Throws on NOK / no ACK. */
+  /**
+   * Write Byte `0x01` with retry (LSC retries up to 5× on a non-ACK). Our writes are all protection
+   * registers, so a retry is idempotent. Deterministic NOKs (illegal 0x03, unknown 0x05) throw at once.
+   */
   async writeByte(addr: number, data: number): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.writeByteOnce(addr, data);
+      } catch (e) {
+        if (e instanceof PgError && (e.nok === 0x03 || e.nok === 0x05)) throw e;
+        if (this.abort || attempt >= Connection.RETRIES) throw e;
+        this.logger.log('  retry Write Byte ' + addr8(addr) + ' (attempt ' + (attempt + 1) + '/' + Connection.RETRIES + ')', 'mut');
+      }
+    }
+  }
+
+  /** One Write Byte attempt. Response is a bare `0x06` (or `15 <code>`). */
+  private async writeByteOnce(addr: number, data: number): Promise<void> {
     const cmd = new Uint8Array([OP.WRITE_BYTE, ...this.addrBytes(addr), data & 0xff]);
     const A = addr8(addr);
     await this.xport.read(4096, 40);
@@ -224,10 +263,11 @@ export class Connection {
       throw new Error('Mode request not confirmed (got ' + hex(r) + ').');
     }
     const m = r[1];
-    const nm = MODES[m] ?? 'unknown 0x' + m.toString(16);
+    const stopped = isStopMode(m);
+    const nm = MODES[m] ?? (stopped ? 'STOP (0x' + m.toString(16) + ')' : 'unknown 0x' + m.toString(16));
     this.logger.log(
-      'Operating mode: ' + nm + (m === MODE_STOP ? '  ← good, memory reads need STOP' : '  ← reads will be REJECTED; press “2 · Put in STOP”'),
-      m === MODE_STOP ? 'ok' : 'err',
+      'Operating mode: ' + nm + (stopped ? '  ← good, memory reads need STOP' : '  ← reads will be REJECTED; press “2 · Put in STOP”'),
+      stopped ? 'ok' : 'err',
     );
     await this.drain('mode');
     return m;
