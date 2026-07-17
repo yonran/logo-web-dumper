@@ -19,6 +19,7 @@ const ui: Ui = {
     el.textContent = t;
     el.className = cls ?? 'mut';
   },
+  confirm: (m) => window.confirm(m),
 };
 
 const app = new App(store, logger, ui);

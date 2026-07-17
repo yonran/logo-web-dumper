@@ -41,18 +41,22 @@ test('readByte returns 0x00 for protected secret memory without faulting', async
   assert.equal(await c.readByte(ADDR.PWD_MEM), 0x00);
 });
 
-test('readByte reveals secret memory once protection is lowered on a leaking device', async () => {
-  const { c } = make({ passwordExists: true, leaksCleartext: true, password: 'Kp' });
-  assert.equal(await c.readByte(ADDR.PWD_MEM), 0x00); // still protected
-  await c.writeByte(ADDR.PL_LEVEL1, 0x00); // lower protection
+test('leaking device: password store reads directly; program needs the 0x4800 clear write', async () => {
+  const { c } = make({ passwordExists: true, leaksCleartext: true, password: 'Kp', program: new Uint8Array([0xaa, 0xbb]) });
+  // The password store leaks without any write (LOGO!Soft reads it before clearing).
   assert.equal(await c.readByte(ADDR.PWD_MEM), 'K'.charCodeAt(0));
   assert.equal(await c.readByte(ADDR.PWD_MEM + 1), 'p'.charCodeAt(0));
+  // The program is still protected until the clear write.
+  assert.equal(await c.readByte(ADDR.PROGRAM), 0x00);
+  await c.writeByte(ADDR.PL_CLEAR, 0x00); // clear protection (0x4800)
+  assert.equal(await c.readByte(ADDR.PROGRAM), 0xaa);
+  assert.equal(await c.readByte(ADDR.PROGRAM + 1), 0xbb);
 });
 
-test('writeByte to 0x00FF4740 is ACKed and sends 01 + address + data', async () => {
+test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () => {
   const { c, d } = make();
-  await c.writeByte(ADDR.PL_LEVEL1, 0x00);
-  assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x47, 0x40, 0x00]);
+  await c.writeByte(ADDR.PL_CLEAR, 0x00);
+  assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
 test('Read Block is rejected on the ES10 model (tryBlock → null)', async () => {

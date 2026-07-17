@@ -119,18 +119,17 @@ test('reading the protected program area yields all zeros', async () => {
   assert.deepEqual([...region], new Array<number>(16).fill(0));
 });
 
-test('unlock (E1b, with re-negotiate) DOES NOT TAKE — write ACKed but reads stay zero', async () => {
+test('unlock with the corrected 0x4800 write still does not take on the ES10 model', async () => {
   const h = makeHarness(ES10);
   await recoverPasswordAndUnlock(h.app);
-  assert.ok(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00)); // the protection write was sent
-  assert.ok(logged(h.logger, 'UNLOCK DID NOT TAKE'));
-  assert.ok(logged(h.logger, 'still all zero'));
+  assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00)); // the CORRECTED clear write (0x4800)
+  assert.ok(logged(h.logger, 'Still all zero after writing 0x00FF4800'));
 });
 
-test('unlock (E1a, no re-negotiate) also stays zero — firmware genuinely holds', async () => {
+test('recoverNoReneg with 0x4800 also stays zero — firmware genuinely holds', async () => {
   const h = makeHarness(ES10);
   await recoverNoReneg(h.app);
-  assert.ok(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00));
+  assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
   assert.ok(logged(h.logger, 'firmware genuinely holds'));
 });
 

@@ -130,6 +130,35 @@ findings:
 false so decode blocks, while Re-lock stays enabled because a password exists. Covered by the
 regression test in `test/observed-es10.test.ts`.
 
+### LOGO!Soft Comfort decompilation — 2026-07-16 (the unlock register was WRONG)
+
+Obtained a genuine LOGO!Soft Comfort V8.0 installer, extracted `classes.jar` statically (no
+execution), and disassembled `DE.siemens.ad.logo.model.hardware.Modular0` with `javap`. This is
+the authoritative source — LSC's own code — and it corrects a load-bearing address:
+
+- `isPWProtected` → `readByte(0x48FF)`; `uploadPassword` → `readByteArray(0x0566, 10)` (stop at
+  first zero); `checkPassword` → `enteredPassword.equals(storedPassword)` **in the PC**, throwing
+  "Upload denied. Wrong Password" on mismatch. **No password is sent to the device** — confirms
+  the client-side model with zero ambiguity.
+- `clearPasswordOnLogo` → `writeByte(getAdress(ADR_CLEAR_PASSWORD_ACTIVE), 0)`, and `getAdress`
+  maps `ADR_CLEAR_PASSWORD_ACTIVE` → `sipush 18432` = **`0x4800`** (`ADR_SET_PASSWORD_ACTIVE` →
+  `18433` = `0x4801`, `ADR_PASSWORD_FLAG` → `18687` = `0x48FF`).
+
+**So the real unlock write is `0x00FF4800 = 0`, not the `0x00FF4740` we inherited from
+brickpool** (whose protection-level labels are wrong — it calls `0x4800` "level-2 read
+protection"). Our `0x4740` write was ACK'd on the ES10 but never opened reads, exactly consistent
+with it being the wrong register. Re-lock is the paired `0x00FF4801 = 0`.
+
+**Tool change:** the unlock now (1) reads the password first (LSC order), (2) shows it in an
+OK/Cancel verify prompt, (3) on OK writes `0x00FF4800 = 0`, then reads back; Re-lock writes
+`0x00FF4801`. **This means the register LOGO!Soft actually uses has NEVER been tried on the DUT** —
+the `0x4800` write is a genuinely new experiment. Pending a hardware run.
+
+> Sobering caveat from the same decompilation: LSC reads `0x0566` *before* clearing, and gates the
+> `0x4800` write behind a successful local compare. On the ES10, `0x0566` reads zero, so LSC itself
+> would also stall — it has no magic path. But our goal is just to read the program, so writing
+> `0x4800` directly (which LSC never does without the compare) is still worth testing.
+
 ---
 
 ## Live hypotheses (post-E1a/E1b)

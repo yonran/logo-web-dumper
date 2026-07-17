@@ -157,24 +157,39 @@ Read Byte 0x00FF1F00  →  0x04   (magic, sanity)
 Read Byte 0x00FF1F01  →  0x00   (magic, sanity)
 ```
 
-**The 0BA6 stores the password in cleartext and it is recoverable from the device.** The documented login (`SetSessionPassword()` in `LogoPG.cpp`) lowers protection and then reads the stored password back to compare it:
+**The 0BA6 stores the password in cleartext and it is recoverable from the device.** The sequence is what LOGO!Soft Comfort itself does — **verified by decompiling LSC V8.0** (`DE.siemens.ad.logo.model.hardware.Modular0`, methods `isPWProtected` / `uploadPassword` / `checkPassword` / `clearPasswordOnLogo`, with `getAdress` mapping the symbolic addresses):
 
 ```
-Write Byte 0x00FF4740 = 0x00     ← protection level 1 (no protection). THE ONLY WRITE.
-Read  0x00FF0566 .. 0x00FF056F   ← 10-byte cleartext password (now readable)
-                                   (use Read Byte on 0BA6.ES10; Read Block is rejected)
+Read  0x00FF48FF                 ← password flag (isPWProtected)
+Read  0x00FF0566 .. 0x00FF056F   ← 10-byte cleartext password (uploadPassword, stop at first 0)
+                                   (Read Byte on 0BA6.ES10; Read Block is rejected)
+[compare entered vs stored IN THE PC — no password is ever sent to the device]
+Write Byte 0x00FF4800 = 0x00     ← clear protection (clearPasswordOnLogo). THE UNLOCK WRITE.
 ```
 
-Protection levels (write targets): `0x00FF4740` = level 1 (none), `0x00FF4800` = level 2 (read), `0x00FF4100` = level 3 (read/write).
+Verified LSC addresses (`getAdress` returns the 16-bit value; the 0BA6 32-bit form prepends `0x00FF`):
 
-**Safety of this write** (audited against `SetSessionPassword()`):
-- It is byte-identical to what LOGO!Soft's login does. It changes a protection-level register, not program memory.
-- It is **non-destructive**: the program and the stored password are untouched (the reference reads both *after* this write). The only command that erases the program/password is Clear Program `0x20`, which is never sent.
-- It is **reversible**: writing `0x00` to `0x00FF4100` restores level 3 with the existing password. (Level is not independently reported by `0x48FF`, which only says whether a password exists, so a device originally at level 2 comes back at level 3 — marginally more locked, still non-destructive.)
+| Symbolic (LSC) | 16-bit | 0BA6 | Role |
+|---|---|---|---|
+| `ADR_PASSWORD_FLAG` | `0x48FF` | `0x00FF48FF` | read: password present? |
+| `ADR_PASSWORD` | (`0x0566`) | `0x00FF0566` | read: 10-byte cleartext |
+| `ADR_CLEAR_PASSWORD_ACTIVE` | `0x4800` | `0x00FF4800` | write 0 → **clear protection (unlock)** |
+| `ADR_SET_PASSWORD_ACTIVE` | `0x4801` | `0x00FF4801` | write 0 → **set protection (re-lock)** |
+
+> ⚠️ **Correction.** Earlier versions of this tool wrote `0x00FF4740` to unlock, taken from
+> brickpool's `LogoPG.cpp` (`ADDR_PL_W_LEVEL1`). That is **wrong**: brickpool's protection-level
+> labels don't match what LSC does — LSC clears protection by writing `0` to **`0x4800`** (which
+> brickpool mislabels as "level 2 read protection") and re-locks with **`0x4801`**. The `0x4740`
+> write was ACK'd on the 0BA6.ES10 but never opened reads, consistent with it being the wrong
+> register. This tool now writes `0x4800` / `0x4801`.
+
+**Safety of this write:**
+- It changes a protection register, not program memory. **Non-destructive**: the program and the stored password are untouched (LSC reads the password *before* this write, and the program *after*). The only command that erases the program/password is Clear Program `0x20`, which is never sent.
+- It is **reversible**: writing `0x00` to `0x00FF4801` re-sets protection (`clearPasswordOnLogo`'s paired setter). `0x48FF` only reports whether a password exists, not the level.
 
 > This is password *recovery from your own hardware*, exploiting the 0BA6's cleartext storage — legitimate for a device you own, not a way around someone else's protection.
 
-Source: brickpool/logo `src/LogoPG.cpp` — `SetSessionPassword()`, `ClearSessionPassword()`, `WriteByte()`, `ADDR_PL_*` / `ADDR_PWD_*`; PG-Protocol wiki "Write Byte 01", protection/password sections. Verified against real hardware (0BA6.ES10): `0x00FF48FF = 0x40`.
+Source: **LOGO!Soft Comfort V8.0 bytecode** (`Modular0.getAdress` → `ADR_CLEAR_PASSWORD_ACTIVE = 0x4800`, `ADR_SET_PASSWORD_ACTIVE = 0x4801`, `ADR_PASSWORD_FLAG = 0x48FF`; `checkPassword` does a local `String.equals`, sending nothing to the device). Cross-referenced with brickpool/logo `src/LogoPG.cpp` (whose `0x4740` unlock is not what LSC uses). Verified against real hardware (0BA6.ES10): `0x00FF48FF = 0x40`.
 
 ---
 

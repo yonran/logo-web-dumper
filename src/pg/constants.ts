@@ -19,11 +19,18 @@ export const ADDR = {
   IDENT: 0x00ff1f02, // ident byte (proven readable on 0BA6.ES10)
   FW_START: 0x00ff1f03, // firmware string "V.." runs 1F03..1F08
   FW_END: 0x00ff1f08,
-  PWD_EXISTS: 0x00ff48ff, // 0x40 = password set, 0x00 = none
-  PWD_MEM: 0x00ff0566, // 10-byte password store (cleartext on 0BA5)
-  PL_LEVEL1: 0x00ff4740, // write 0 → protection level 1 (no protection)
-  PL_LEVEL2: 0x00ff4800, // write 0 → protection level 2 (read protection)
-  PL_LEVEL3: 0x00ff4100, // write 0 → protection level 3 (read/write protection)
+  PWD_EXISTS: 0x00ff48ff, // 0x40 = password set, 0x00 = none (LSC ADR_PASSWORD_FLAG)
+  PWD_MEM: 0x00ff0566, // 10-byte password store (cleartext on 0BA5/0BA6)
+  // Protection registers, VERIFIED by decompiling LOGO!Soft Comfort V8.0
+  // (DE.siemens.ad.logo.model.hardware.Modular0.getAdress + clearPasswordOnLogo/set method).
+  // LSC clears protection by writing 0 to 0x4800 and re-sets it by writing 0 to 0x4801.
+  PL_CLEAR: 0x00ff4800, // ADR_CLEAR_PASSWORD_ACTIVE — write 0 to UNLOCK (what LSC actually does)
+  PL_SET: 0x00ff4801, // ADR_SET_PASSWORD_ACTIVE — write 0 to RE-LOCK
+  // Legacy addresses from brickpool's LogoPG.cpp (its protection-level labels are wrong: it
+  // calls 0x4800 "level 2 read protection", but LSC uses it to CLEAR protection). Kept for
+  // reference; 0x4740 is what this tool used to write and it never took on the 0BA6.ES10.
+  PL_LEVEL1: 0x00ff4740, // brickpool "level 1 (no protection)" — NOT what LSC writes
+  PL_LEVEL3: 0x00ff4100, // brickpool "level 3 (read/write protection)"
   PROG_NAME: 0x00ff0570, // 16-byte ASCII program name
   PTR_TABLE: 0x00ff0c14, // 260-byte pointer table
   OUT_WIRING: 0x00ff0e20, // 200-byte output/marker wiring

@@ -12,6 +12,8 @@ export interface Ui {
   setNetlist(text: string): void;
   /** Set the connection status label. */
   setStatus(text: string, cls: LogClass): void;
+  /** Show an OK/Cancel prompt; returns true on OK. Used to verify the recovered password. */
+  confirm(message: string): boolean;
 }
 
 export class App {

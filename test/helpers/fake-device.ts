@@ -30,7 +30,8 @@ export class FakeDevice implements Transport {
   private protectionLowered = false;
   private readonly cfg: Required<Pick<FakeDeviceConfig, 'identNo' | 'passwordExists' | 'leaksCleartext' | 'blockReadsWork'>> &
     FakeDeviceConfig;
-  private readonly secret = new Map<number, number>();
+  private readonly pwdMem = new Map<number, number>(); // 0x0566 store — leaks without any write
+  private readonly progMem = new Map<number, number>(); // program etc. — needs the clear write
   private readonly sys = new Map<number, number>();
 
   constructor(config: FakeDeviceConfig = {}) {
@@ -50,16 +51,23 @@ export class FakeDevice implements Transport {
     for (let i = 0; i < FW.length; i++) this.sys.set(ADDR.FW_START + i, FW.charCodeAt(i));
     this.sys.set(ADDR.PWD_EXISTS, this.cfg.passwordExists ? 0x40 : 0x00);
 
-    // Secret registers — readable only when protection is effectively down.
+    // Password store: on a leaking device it is exposed as soon as it's queried (LOGO!Soft reads
+    // it before writing anything). The clear write is not needed to see it.
     const pw = config.password ?? 'secret';
-    for (let i = 0; i < 10; i++) this.secret.set(ADDR.PWD_MEM + i, i < pw.length ? pw.charCodeAt(i) : 0x00);
+    for (let i = 0; i < 10; i++) this.pwdMem.set(ADDR.PWD_MEM + i, i < pw.length ? pw.charCodeAt(i) : 0x00);
+    // Program memory: protected until the clear write drops protection (on a leaking device).
     const prog = config.program ?? new Uint8Array(0);
-    for (let i = 0; i < prog.length; i++) this.secret.set(ADDR.PROGRAM + i, prog[i]);
+    for (let i = 0; i < prog.length; i++) this.progMem.set(ADDR.PROGRAM + i, prog[i]);
   }
 
-  /** True when secret memory (password store, program) is currently exposed. */
-  private secretsReadable(): boolean {
-    return !this.cfg.passwordExists || (this.protectionLowered && this.cfg.leaksCleartext);
+  /** Password store readable: no password, or the firmware leaks the cleartext (no write needed). */
+  private pwdReadable(): boolean {
+    return !this.cfg.passwordExists || this.cfg.leaksCleartext;
+  }
+
+  /** Program readable: no password, or (the firmware leaks AND protection has been cleared). */
+  private progReadable(): boolean {
+    return !this.cfg.passwordExists || (this.cfg.leaksCleartext && this.protectionLowered);
   }
 
   private push(...bytes: number[]): void {
@@ -135,8 +143,10 @@ export class FakeDevice implements Transport {
     if (op === 0x01) {
       // Write Byte → ACK. Protection registers change the effective level.
       const a = FakeDevice.addr(cmd);
-      if (a === ADDR.PL_LEVEL1) this.protectionLowered = true;
-      else if (a === ADDR.PL_LEVEL2 || a === ADDR.PL_LEVEL3) this.protectionLowered = false;
+      // 0x4800 (LSC clear) and legacy 0x4740 lower protection; 0x4801 (LSC set) and legacy
+      // 0x4100 re-lock. Whether a lowered level actually opens reads is gated by leaksCleartext.
+      if (a === ADDR.PL_CLEAR || a === ADDR.PL_LEVEL1) this.protectionLowered = true;
+      else if (a === ADDR.PL_SET || a === ADDR.PL_LEVEL3) this.protectionLowered = false;
       this.push(0x06);
       return;
     }
@@ -166,7 +176,8 @@ export class FakeDevice implements Transport {
 
   private readMem(a: number): number {
     if (this.sys.has(a)) return this.sys.get(a)!;
-    if (this.secret.has(a)) return this.secretsReadable() ? this.secret.get(a)! : 0x00;
+    if (this.pwdMem.has(a)) return this.pwdReadable() ? this.pwdMem.get(a)! : 0x00;
+    if (this.progMem.has(a)) return this.progReadable() ? this.progMem.get(a)! : 0x00;
     return 0x00; // unmapped/protected reads return 0x00 without faulting
   }
 }

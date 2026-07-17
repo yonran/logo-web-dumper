@@ -13,6 +13,10 @@ export class FakeUi implements Ui {
   status = '';
   statusCls: LogClass = null;
   inputs: Record<string, string> = {};
+  /** What confirm() returns (set false to simulate the operator clicking Cancel). */
+  confirmReturn = true;
+  /** Messages passed to confirm(), for assertions. */
+  readonly confirmMessages: string[] = [];
 
   input(id: string): string {
     return this.inputs[id] ?? '';
@@ -23,6 +27,10 @@ export class FakeUi implements Ui {
   setStatus(t: string, cls: LogClass): void {
     this.status = t;
     this.statusCls = cls;
+  }
+  confirm(message: string): boolean {
+    this.confirmMessages.push(message);
+    return this.confirmReturn;
   }
 }
 

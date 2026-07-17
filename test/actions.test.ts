@@ -31,14 +31,31 @@ test('doStop on an unprotected device: protected=false, no re-lock caveat', asyn
   assert.equal(logged(h.logger, 'NOT the current protection level'), false);
 });
 
-test('unlock on a non-leaking ES10: write is sent but reads stay zero → UNLOCK DID NOT TAKE', async () => {
+test('unlock on a non-leaking ES10: writes 0x4800 but reads stay zero → does not take', async () => {
   const h = makeHarness({ passwordExists: true, leaksCleartext: false, password: 'topsecret' });
   await recoverPasswordAndUnlock(h.app);
   // A failed unlock must NOT report the device as unlocked (the decode guard depends on this).
   assert.equal(h.store.get().unlocked, false);
-  assert.ok(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00));
-  assert.ok(logged(h.logger, 'UNLOCK DID NOT TAKE'));
-  assert.ok(logged(h.logger, 'still all zero'));
+  // The CORRECTED clear register (0x4800), not the old 0x4740.
+  assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
+  assert.equal(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00), false);
+  assert.ok(logged(h.logger, 'Still all zero after writing 0x00FF4800'));
+});
+
+test('unlock shows the recovered password in a verify prompt before writing', async () => {
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, password: 'sesame', program: new Uint8Array(4).fill(1) });
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.ui.confirmMessages.length, 1);
+  assert.ok(h.ui.confirmMessages[0].includes('sesame'));
+});
+
+test('unlock does NOTHING if the operator cancels the verify prompt', async () => {
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, password: 'sesame' });
+  h.ui.confirmReturn = false; // operator clicks Cancel
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.device.writes.some((w) => w[0] === 0x01), false); // no write at all
+  assert.equal(h.store.get().unlocked, false);
+  assert.ok(logged(h.logger, 'Aborted at the verify prompt'));
 });
 
 test('a successful unlock DOES set unlocked=true (leaking device)', async () => {
@@ -66,24 +83,24 @@ test('unlock aborts before any write when no password is set', async () => {
   assert.ok(logged(h.logger, 'no protection to recover'));
 });
 
-test('recoverNoReneg on a non-leaking device reports the firmware genuinely holds', async () => {
+test('recoverNoReneg on a non-leaking device writes 0x4800 and reports the firmware holds', async () => {
   const h = makeHarness({ passwordExists: true, leaksCleartext: false });
   await recoverNoReneg(h.app);
-  assert.ok(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00));
+  assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
   assert.ok(logged(h.logger, 'firmware genuinely holds'));
 });
 
-test('recoverNoReneg on a leaking device reports the re-negotiate was the cause', async () => {
+test('recoverNoReneg on a leaking device recovers the program after the 0x4800 write', async () => {
   const prog = new Uint8Array(16).fill(0x11);
   const h = makeHarness({ passwordExists: true, leaksCleartext: true, program: prog });
   await recoverNoReneg(h.app);
-  assert.ok(logged(h.logger, 'WITHOUT a re-negotiate'));
+  assert.ok(logged(h.logger, 'reads returned real data'));
 });
 
-test('relock writes protection level 3 and restores the state', async () => {
+test('relock writes 0x4801 (set protection) and restores the state', async () => {
   const h = makeHarness({ passwordExists: true });
   await relock(h.app);
-  assert.ok(wroteByte(h.device, ADDR.PL_LEVEL3, 0x00));
+  assert.ok(wroteByte(h.device, ADDR.PL_SET, 0x00));
   assert.equal(h.store.get().protected, true);
   assert.equal(h.store.get().unlocked, false);
 });

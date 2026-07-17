@@ -5,3 +5,7 @@ dist/
 build/
 _site/
 *.tsbuildinfo
+
+# downloaded installer (large binary, do not commit)
+setup.exe
+*.exe
