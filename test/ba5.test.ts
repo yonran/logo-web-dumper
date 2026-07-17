@@ -9,6 +9,18 @@ import { ADDR } from '../src/pg/constants.js';
 import { FakeDevice } from './helpers/fake-device.js';
 import { logged, makeHarness } from './helpers/harness.js';
 import { recoverPasswordAndUnlock } from '../src/actions/password.js';
+import { readAllAndDecode } from '../src/actions/program.js';
+
+test('unrecognised IdentNo connects (diagnostics) but is unverified and blocks the program read', async () => {
+  const h = makeHarness({ identNo: 0x50 }); // not 0x42–0x45 → no verified memory map
+  const ident = await h.conn.connect();
+  assert.equal(ident, 0x50);
+  assert.equal(h.conn.known, false);
+  assert.ok(logged(h.logger, 'Unrecognised'));
+  await readAllAndDecode(h.app);
+  assert.ok(logged(h.logger, 'Program read is disabled'));
+  assert.equal(h.store.get().dumped, false);
+});
 
 test('0BA5 connect: no 0x21 answer, detected via the 2-byte 0x1F02 probe', async () => {
   const l = new Logger();

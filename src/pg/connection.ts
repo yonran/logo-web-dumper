@@ -7,7 +7,7 @@ import type { Logger } from '../log.js';
 import type { Transport } from '../transport/types.js';
 import { addr8, hex } from '../util/hex.js';
 import { cpuErrText, isStopMode, MODES, OP } from './constants.js';
-import { addrBytes as encodeAddr, ba5Like, ba6, BA5, profileForIdent, wireAddr, type DeviceProfile, type ProgramMap } from './device.js';
+import { addrBytes as encodeAddr, ba5Like, ba6, BA5, profileForIdent, unknown4, wireAddr, type DeviceProfile, type ProgramMap } from './device.js';
 
 /** A read/write rejected by the device. `nok` is the CPU exception code, when known. */
 export class PgError extends Error {
@@ -52,6 +52,11 @@ export class Connection {
     return this.device.mem;
   }
 
+  /** True only for models with a verified memory map (0BA5 / 0BA6 family). */
+  get known(): boolean {
+    return this.device.known;
+  }
+
   async close(): Promise<void> {
     await this.xport.close();
   }
@@ -75,8 +80,11 @@ export class Connection {
     if (r.length >= 4 && r[0] === OP.ACK) {
       await this.drain('connect', 120);
       const ident = r[3];
-      this.device = profileForIdent(ident) ?? ba6(ident);
-      this.logger.log('Connected. IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, ident >= 0x43 && ident <= 0x45 ? 'ok' : 'err');
+      this.device = profileForIdent(ident) ?? unknown4(ident);
+      this.logger.log('Connected. IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, this.device.known ? 'ok' : 'err');
+      if (!this.device.known) {
+        this.logger.log('⚠ Unrecognised IdentNo 0x' + ident.toString(16) + ' — NOT a model this tool has a verified memory map for (supported: 0BA5 0x42, 0BA6 0x43–0x45). Diagnostics and the shared protection registers still work, but the program read is disabled because its addresses would be a guess.', 'err');
+      }
       return ident;
     }
     // No 0x21 answer — try the 0BA5 (2-byte) probe: Read Byte at 0x1F02 (the ident register).
@@ -90,7 +98,10 @@ export class Connection {
       await this.drain('connect (0BA5)', 120);
       const ident = p[4];
       this.device = ident === 0x42 ? BA5 : ba5Like(ident);
-      this.logger.log('Connected. 0BA5-style device, IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, 'ok');
+      this.logger.log('Connected. 0BA5-style device, IdentNo=0x' + ident.toString(16) + ' → ' + this.device.name, this.device.known ? 'ok' : 'err');
+      if (!this.device.known) {
+        this.logger.log('⚠ Unrecognised 2-byte IdentNo 0x' + ident.toString(16) + ' — not a verified model (supported: 0BA5 0x42). Program read is disabled; diagnostics still work.', 'err');
+      }
       return ident;
     }
     throw new Error('No device ack (neither 0BA6 0x21 nor 0BA5 0x1F02 probe). Got: ' + hex(r) + ' / ' + hex(p) + '. Is it in STOP and cabled?');

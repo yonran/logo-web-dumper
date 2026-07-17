@@ -13,6 +13,10 @@ import { deviceSlug, ensureStopped } from './common.js';
 export async function readAllAndDecode(app: App): Promise<void> {
   const conn = await ensureStopped(app);
   if (!conn) return;
+  if (!conn.known) {
+    app.log('Program read is disabled for ' + conn.deviceName + ' — this tool has no verified memory map for it, so the region addresses would be a guess. Use “Dump raw region” with an explicit address if you know where to read.', 'err');
+    return;
+  }
   // Pre-flight: if protected and not yet unlocked, reads would be all zeros.
   const prot = await conn.readByte(ADDR.PWD_EXISTS);
   app.store.set({ protected: isPasswordSet(prot) });

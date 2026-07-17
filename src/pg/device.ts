@@ -58,22 +58,33 @@ export interface DeviceProfile {
   readonly addrWidth: 2 | 4;
   /** Program memory map for this device family. */
   readonly mem: ProgramMap;
+  /**
+   * True only for the models this tool has an actually-verified map for (0BA5, 0BA6/ES3/ES10).
+   * A device that connects with an unrecognised IdentNo gets a best-guess map with known=false;
+   * memory-map-dependent operations (program read) refuse rather than read guessed addresses.
+   */
+  readonly known: boolean;
 }
 
 /** 0BA5: 2-byte addressing, no 0xFF page, legacy (0BA4-inherited) program map. */
-export const BA5: DeviceProfile = { identNo: 0x42, name: '0BA5', addrWidth: 2, mem: MAP_LEGACY };
+export const BA5: DeviceProfile = { identNo: 0x42, name: '0BA5', addrWidth: 2, mem: MAP_LEGACY, known: true };
 
 /** 0BA6 family (0BA6 / ES3 / ES10): 4-byte addressing, high paged program map. */
 export function ba6(ident: number): DeviceProfile {
-  return { identNo: ident, name: IDENT_NAMES[ident] ?? '0x' + ident.toString(16), addrWidth: 4, mem: MAP_0BA6 };
+  return { identNo: ident, name: IDENT_NAMES[ident] ?? '0x' + ident.toString(16), addrWidth: 4, mem: MAP_0BA6, known: true };
 }
 
-/** A 0BA5-style device detected only via the 0x1F02 probe (unknown IdentNo → 2-byte, legacy map). */
+/** Unrecognised 4-byte responder: assume 0BA6-style so diagnostics work, but flag it unverified. */
+export function unknown4(ident: number): DeviceProfile {
+  return { identNo: ident, name: 'unknown 0x' + ident.toString(16) + ' (4-byte)', addrWidth: 4, mem: MAP_0BA6, known: false };
+}
+
+/** Unrecognised device answering only the 2-byte 0x1F02 probe: assume legacy map, flagged unverified. */
 export function ba5Like(ident: number): DeviceProfile {
-  return { identNo: ident, name: IDENT_NAMES[ident] ?? '0x' + ident.toString(16), addrWidth: 2, mem: MAP_LEGACY };
+  return { identNo: ident, name: 'unknown 0x' + ident.toString(16) + ' (2-byte)', addrWidth: 2, mem: MAP_LEGACY, known: false };
 }
 
-/** Resolve an IdentNo to a profile (null = unknown / unsupported). */
+/** Resolve an IdentNo to a KNOWN profile (null = unrecognised / unsupported). */
 export function profileForIdent(ident: number): DeviceProfile | null {
   if (ident === 0x42) return BA5;
   if (ident >= 0x43 && ident <= 0x45) return ba6(ident);
