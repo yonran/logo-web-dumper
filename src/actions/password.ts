@@ -15,6 +15,23 @@ function passwordString(pw: Uint8Array): string {
   return ascii(end >= 0 ? pw.slice(0, end) : pw);
 }
 
+// LSC's `SymmetricalSimpleEncoding` — newer 0BA6 firmware (e.g. the ES10 / Logo6Update2) stores the
+// password XOR-obfuscated, not cleartext. It is a plain symmetric XOR against the fixed 16-byte
+// ASCII key "protect customer" plus a bit-flip (0xFF), applied position-wise over the NONZERO
+// stored bytes. This reverses it. (Not a cipher — no key material beyond this hardcoded string.)
+const SIMPLE_KEY = 'protect customer';
+
+/** Decode a `SymmetricalSimpleEncoding`-obfuscated password store (newer 0BA6 firmware). */
+export function simpleDecode(raw: Uint8Array): string {
+  const nz = [...raw].filter((b) => b !== 0);
+  let out = '';
+  for (let i = 0; i < nz.length; i++) {
+    const c = (nz[i] ^ SIMPLE_KEY.charCodeAt(i) ^ 0xff) & 0xff;
+    out += c >= 32 && c < 127 ? String.fromCharCode(c) : '·';
+  }
+  return out;
+}
+
 /**
  * Recover + unlock, following what LOGO!Soft Comfort actually does (verified from its bytecode):
  * read the flag, read the stored cleartext password FIRST, show it to the operator to verify,
@@ -42,17 +59,29 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   app.log('Reading the stored password from 0x00FF0566 (as LOGO!Soft does, before any write)…', 'mut');
   const pw = await conn.readRegion(ADDR.PWD_MEM, 10, 'password area');
   const pwnz = [...pw].some((b) => b);
-  const pwStr = passwordString(pw);
-  app.log('Password area @0x00FF0566: ' + (pwnz ? '"' + pwStr + '"  raw ' + hex(pw) : 'all zero — the device did not return a readable password'), pwnz ? 'ok' : 'err');
+  // Older firmware stores the password as cleartext; newer 0BA6 (ES10) stores it XOR-obfuscated
+  // (LSC SymmetricalSimpleEncoding). We can't always tell which, so we show BOTH interpretations
+  // and let the operator recognise their password.
+  const cleartext = passwordString(pw);
+  const decoded = simpleDecode(pw);
+  if (pwnz) {
+    app.log('Password @0x00FF0566: raw bytes ' + hex(pw), 'ok');
+    app.log('  → as cleartext (older firmware): "' + cleartext + '"', 'mut');
+    app.log('  → XOR-decoded (newer 0BA6 / ES10 "protect customer"): "' + decoded + '"', 'mut');
+  } else {
+    app.log('Password area @0x00FF0566: all zero — the device did not return a readable password', 'err');
+  }
 
   // Verify prompt (OK / Cancel). This is the client-side "compare" step — the operator confirms
   // the recovered password looks right before we touch the protection register.
   const msg = pwnz
-    ? 'Password read from the device:\n\n    "' + pwStr + '"\n    raw: ' + hex(pw) + '\n\n' +
-      'Verify this is the correct password.\n\n' +
+    ? 'Password read from the device (raw ' + hex(pw) + '):\n\n' +
+      '  • cleartext (older firmware):   "' + cleartext + '"\n' +
+      '  • XOR-decoded (newer 0BA6/ES10): "' + decoded + '"\n\n' +
+      'One of these is your password (it depends on firmware). Verify it looks right.\n\n' +
       'OK  = clear protection (write 0x00FF4800 = 0, what LOGO!Soft does) and read the program.\n' +
       'Cancel = abort, nothing is written.'
-    : 'The device did NOT return a readable password (0x00FF0566 is all zero) — this firmware is not leaking the cleartext.\n\n' +
+    : 'The device did NOT return a readable password (0x00FF0566 is all zero) — this firmware is not leaking it.\n\n' +
       'OK  = try the clear-protection write anyway (0x00FF4800 = 0, the register LOGO!Soft uses) and see if the program opens.\n' +
       'Cancel = abort, nothing is written.';
   if (!app.ui.confirm(msg)) {

@@ -28,8 +28,12 @@ export interface FakeDeviceConfig {
   leaksCleartext?: boolean; // does the firmware leak the cleartext? default false (ES10 holds)
   blockReadsWork?: boolean; // does Read Block 0x05 succeed? default false (ES10 rejects)
   password?: string; // stored cleartext (≤10 chars)
+  encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
 }
+
+// LSC SymmetricalSimpleEncoding key — ground truth, defined independently of the tool's decoder.
+const SIMPLE_KEY = 'protect customer';
 
 const FW = 'V10707'; // 1F03..1F08 → decodes to firmware "V1.07.07"
 
@@ -69,7 +73,12 @@ export class FakeDevice implements Transport {
 
     // Password store: on a leaking device it is exposed as soon as it's queried (no write needed).
     const pw = config.password ?? 'secret';
-    for (let i = 0; i < 10; i++) this.pwdMem.set(this.wire(BASE.PWD_MEM + i), i < pw.length ? pw.charCodeAt(i) : 0x00);
+    for (let i = 0; i < 10; i++) {
+      let b = i < pw.length ? pw.charCodeAt(i) : 0x00;
+      // Newer 0BA6 firmware stores it obfuscated: enc = (~plain) ^ key[i]. Padding stays 0x00.
+      if (config.encryptPassword && i < pw.length) b = (pw.charCodeAt(i) ^ 0xff ^ SIMPLE_KEY.charCodeAt(i)) & 0xff;
+      this.pwdMem.set(this.wire(BASE.PWD_MEM + i), b);
+    }
     // Program memory: protected until the clear write drops protection (on a leaking device).
     const prog = config.program ?? new Uint8Array(0);
     for (let i = 0; i < prog.length; i++) this.progMem.set(this.wire(BASE.PROGRAM + i), prog[i]);

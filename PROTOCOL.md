@@ -202,6 +202,16 @@ Verified LSC addresses (`getAdress` returns the 16-bit value; the 0BA6 32-bit fo
 
 > This is password *recovery from your own hardware*, exploiting the 0BA6's cleartext storage — legitimate for a device you own, not a way around someone else's protection.
 
+**Password obfuscation on newer 0BA6 firmware.** Older firmware stores the 10 password bytes at `0x0566` as plain ASCII. Newer 0BA6 (e.g. the **ES10 / `Logo6Update2`**, gated by `supports("supportPasswordSimpleEncrypt")`) stores them **obfuscated** — LSC's `EncryptAndDecrypt$SymmetricalSimpleEncoding`. This is **not** a cipher (contrast the LOGO!8 Ethernet path, which uses real 3DES under a null key): it's a symmetric per-byte XOR against a hardcoded 16-byte ASCII key, plus a bit-flip, applied over the nonzero bytes:
+
+```
+plaintext[i] = stored[i]  XOR  "protect customer"[i]  XOR  0xFF
+```
+
+Trivially reversible (the key is baked into the app). This tool reads the raw bytes and shows **both** the cleartext and the XOR-decoded interpretation so the operator recognises their password regardless of firmware.
+
+Source: **LOGO!Soft Comfort V8.0 bytecode** — `EncryptAndDecrypt$SymmetricalSimpleEncoding` (key `code[] = "protect customer"`), invoked by `Logo6Update2.uploadPassword`.
+
 Source: **LOGO!Soft Comfort V8.0 bytecode** (`Modular0.getAdress` → `ADR_CLEAR_PASSWORD_ACTIVE = 0x4800`, `ADR_SET_PASSWORD_ACTIVE = 0x4801`, `ADR_PASSWORD_FLAG = 0x48FF`; `checkPassword` does a local `String.equals`, sending nothing to the device). Cross-referenced with brickpool/logo `src/LogoPG.cpp` (whose `0x4740` unlock is not what LSC uses). Verified against real hardware (0BA6.ES10): `0x00FF48FF = 0x40`.
 
 ---

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
 import { doCheckMode, doStop } from '../src/actions/session.js';
-import { recoverNoReneg, recoverPasswordAndUnlock, relock } from '../src/actions/password.js';
+import { recoverNoReneg, recoverPasswordAndUnlock, relock, simpleDecode } from '../src/actions/password.js';
 import { checkPassword, readFirmware } from '../src/actions/diagnostics.js';
 import { ADDR } from '../src/pg/constants.js';
 
@@ -40,6 +40,20 @@ test('unlock on a non-leaking ES10: writes 0x4800 but reads stay zero → does n
   assert.ok(wroteByte(h.device, ADDR.PL_CLEAR, 0x00));
   assert.equal(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00), false);
   assert.ok(logged(h.logger, 'Still all zero after writing 0x00FF4800'));
+});
+
+test('simpleDecode reverses the "protect customer" XOR obfuscation', () => {
+  const KEY = 'protect customer';
+  const enc = Uint8Array.from([...'hunter2'].map((c, i) => (c.charCodeAt(0) ^ 0xff ^ KEY.charCodeAt(i)) & 0xff));
+  assert.equal(simpleDecode(enc), 'hunter2');
+});
+
+test('unlock decrypts and displays the password on encrypted (newer-0BA6/ES10) firmware', async () => {
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, encryptPassword: true, password: 'hunter2', program: new Uint8Array(4).fill(1) });
+  await recoverPasswordAndUnlock(h.app);
+  // The XOR-decoded interpretation reveals the real password, shown in both the log and the prompt.
+  assert.ok(logged(h.logger, 'hunter2'));
+  assert.ok(h.ui.confirmMessages.some((m) => m.includes('hunter2')));
 });
 
 test('unlock shows the recovered password in a verify prompt before writing', async () => {
