@@ -127,3 +127,16 @@ test('readRegion reads a run of bytes via Read Byte', async () => {
   const data = await c.readRegion(c.mem.programBase, 4, 'prog');
   assert.deepEqual([...data], [0x10, 0x20, 0x30, 0x40]);
 });
+
+test('readRegion emits progress (start at 0, finish at count) so the UI bar can track it', async () => {
+  const { c } = make({ program: new Uint8Array([0x10, 0x20, 0x30, 0x40]) });
+  const seen: { done: number; total: number }[] = [];
+  c.onProgress = (p) => seen.push({ done: p.done, total: p.total });
+  await c.readRegion(c.mem.programBase, 4, 'prog');
+  assert.equal(seen[0].done, 0, 'first event is an indeterminate 0/total kick');
+  assert.equal(seen[seen.length - 1].done, 4, 'last event reports the full count');
+  assert.ok(
+    seen.every((p) => p.total === 4 && p.done <= p.total),
+    'every event carries the region total and never exceeds it',
+  );
+});

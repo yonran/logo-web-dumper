@@ -9,6 +9,18 @@ import { addr8, hex } from '../util/hex.js';
 import { cpuErrText, isStopMode, MODES, OP } from './constants.js';
 import { addrBytes as encodeAddr, ba5Like, ba6, BA5, profileForIdent, unknown4, wireAddr, type DeviceProfile, type ProgramMap } from './device.js';
 
+/**
+ * Progress of a long region read, emitted so the UI can show a bar instead of forcing the
+ * operator to watch the log scroll by. `done`/`total` are bytes; `elapsedS` is seconds since
+ * this region's read began.
+ */
+export interface ReadProgress {
+  label: string;
+  done: number;
+  total: number;
+  elapsedS: number;
+}
+
 /** A read/write rejected by the device. `nok` is the CPU exception code, when known. */
 export class PgError extends Error {
   readonly nok?: number;
@@ -25,6 +37,12 @@ export class Connection {
 
   /** Set by the Stop button to interrupt a long region read / probe. */
   abort = false;
+
+  /**
+   * Optional sink for long-read progress. The controller points this at the on-screen progress
+   * bar so a dump shows live progress + status without the operator having to read the log.
+   */
+  onProgress: ((p: ReadProgress) => void) | null = null;
 
   /** Addressing profile — set by connect(). Defaults to 0BA6.ES10. */
   private device: DeviceProfile = ba6(0x45);
@@ -262,6 +280,7 @@ export class Connection {
     const firstCmd = new Uint8Array([OP.READ_BYTE, ...encodeAddr(this.device, addr)]);
     this.logger.log('  ' + label + ': → ' + hex(firstCmd) + ' …   (Read Byte ×' + count + ', ' + addr8(addr) + '…' + addr8((addr + count - 1) >>> 0) + ')', 'mut');
     const t0 = Date.now();
+    this.onProgress?.({ label, done: 0, total: count, elapsedS: 0 });
     for (let i = 0; i < count; i++) {
       if (this.abort) {
         this.logger.log('  aborted at ' + i + '/' + count, 'err');
@@ -272,6 +291,7 @@ export class Connection {
         const pct = Math.round(((i + 1) / count) * 100);
         const el = (Date.now() - t0) / 1000;
         this.logger.log('  ' + label + ': ' + (i + 1) + '/' + count + ' bytes (' + pct + '%), ' + el.toFixed(0) + 's elapsed', 'mut');
+        this.onProgress?.({ label, done: i + 1, total: count, elapsedS: el });
       }
     }
     this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Byte.', 'ok');
@@ -288,6 +308,7 @@ export class Connection {
     const out = new Uint8Array(count);
     const t0 = Date.now();
     let done = 0;
+    this.onProgress?.({ label, done: 0, total: count, elapsedS: 0 });
     for (let off = 0; off < count; off += chunk) {
       if (this.abort) {
         this.logger.log('  aborted at ' + off + '/' + count, 'err');
@@ -304,6 +325,7 @@ export class Connection {
       const pct = Math.round((done / count) * 100);
       const el = (Date.now() - t0) / 1000;
       this.logger.log('  ' + label + ': ' + done + '/' + count + ' bytes (' + pct + '%), ' + el.toFixed(0) + 's elapsed', 'mut');
+      this.onProgress?.({ label, done, total: count, elapsedS: el });
     }
     // Only claim success if the whole region actually came back — a green "read via Read Block"
     // after an early break (the ES10, which rejects Read Block) would falsely imply a good dump.

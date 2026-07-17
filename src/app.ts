@@ -5,6 +5,17 @@ import type { Connection } from './pg/connection.js';
 import type { Logger, LogClass } from './log.js';
 import type { Store } from './state/store.js';
 
+/**
+ * A snapshot of the operation currently running, for the on-screen progress indicator.
+ * `fraction` is 0..1 for a determinate bar, or `null` while the operation is running but has no
+ * measurable progress yet (shown as an indeterminate "working…" bar).
+ */
+export interface ProgressView {
+  label: string;
+  fraction: number | null;
+  detail?: string;
+}
+
 export interface Ui {
   /** Current value of a text input by element id. */
   input(id: string): string;
@@ -12,6 +23,8 @@ export interface Ui {
   setNetlist(text: string): void;
   /** Set the connection status label. */
   setStatus(text: string, cls: LogClass): void;
+  /** Show/update the running-operation progress indicator; `null` hides it. */
+  setProgress(p: ProgressView | null): void;
   /** Show an OK/Cancel prompt; returns true on OK. Used to verify the recovered password. */
   confirm(message: string): boolean;
   /** Offer a byte blob to the user as a file download (a DOM action, kept off the action layer). */

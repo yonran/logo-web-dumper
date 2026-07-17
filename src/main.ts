@@ -19,6 +19,23 @@ const ui: Ui = {
     el.textContent = t;
     el.className = cls ?? 'mut';
   },
+  setProgress: (p) => {
+    const wrap = $('#progress');
+    if (!p) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    const bar = $('#progressbar');
+    const fill = $('#progressfill');
+    const indeterminate = p.fraction == null;
+    const pct = p.fraction == null ? 0 : Math.max(0, Math.min(100, Math.round(p.fraction * 100)));
+    bar.classList.toggle('indeterminate', indeterminate);
+    fill.style.width = indeterminate ? '' : pct + '%';
+    bar.setAttribute('aria-valuenow', indeterminate ? '' : String(pct));
+    const head = indeterminate ? p.label + ' — working…' : p.label + ' — ' + pct + '%';
+    $('#progresstext').textContent = p.detail ? head + ' · ' + p.detail : head;
+  },
   confirm: (m) => window.confirm(m),
   download: (filename, bytes) => downloadBytes(filename, bytes),
 };

@@ -1,7 +1,7 @@
 // Test harness: wires an App with a fake Ui and a Connection over a FakeDevice, so action
 // functions can be driven exactly as the buttons drive them.
 
-import { App, type Ui } from '../../src/app.js';
+import { App, type ProgressView, type Ui } from '../../src/app.js';
 import type { LogClass, Logger } from '../../src/log.js';
 import { Logger as LoggerImpl } from '../../src/log.js';
 import { Store } from '../../src/state/store.js';
@@ -19,6 +19,8 @@ export class FakeUi implements Ui {
   readonly confirmMessages: string[] = [];
   /** Files offered via download(), for assertions. */
   readonly downloads: { name: string; bytes: Uint8Array }[] = [];
+  /** Progress snapshots passed to setProgress(), for assertions (null = hidden). */
+  readonly progress: (ProgressView | null)[] = [];
 
   input(id: string): string {
     return this.inputs[id] ?? '';
@@ -29,6 +31,9 @@ export class FakeUi implements Ui {
   setStatus(t: string, cls: LogClass): void {
     this.status = t;
     this.statusCls = cls;
+  }
+  setProgress(p: ProgressView | null): void {
+    this.progress.push(p);
   }
   confirm(message: string): boolean {
     this.confirmMessages.push(message);

@@ -4,6 +4,7 @@
 
 import type { App } from '../app.js';
 import type { AppState } from '../state/store.js';
+import type { ReadProgress } from '../pg/connection.js';
 import type { TransportMode } from '../transport/types.js';
 import { buttonEnablement } from './enablement.js';
 import { $, copyText, downloadText } from '../util/dom.js';
@@ -60,7 +61,10 @@ export function wireUi(app: App): void {
   function render(s: Readonly<AppState>): void {
     const { enabled, next } = buttonEnablement(s);
     document.querySelectorAll<HTMLButtonElement>('button[id]').forEach((b) => {
-      if (b.id in enabled) b.disabled = !enabled[b.id as keyof typeof enabled];
+      // While an operation runs, force every port-touching button off regardless of what the
+      // state-derived enablement says. Actions call store.set() mid-operation (e.g. doStop),
+      // which re-renders — without this an in-flight op would visibly re-enable its own siblings.
+      if (b.id in enabled) b.disabled = !enabled[b.id as keyof typeof enabled] || (busy && !ALWAYS_ON.includes(b.id));
     });
     // The Stop button only exists to interrupt a running operation: enabled only while busy.
     abortBtn.disabled = !busy;
@@ -97,17 +101,18 @@ export function wireUi(app: App): void {
       // a program read would leave abort=true so the next Check-mode's first transient glitch is
       // treated as fatal instead of retried.
       if (app.conn) app.conn.abort = false;
-      document.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
-        if (!ALWAYS_ON.includes(b.id)) b.disabled = true;
-      });
-      abortBtn.disabled = false;
+      // render() (busy-aware) disables every port-touching button and enables Abort.
+      render(app.store.get());
       abortBtn.textContent = 'Abort ' + label; // say what it's stopping
+      // Indeterminate until a long read reports byte progress; short ops just show "working…".
+      app.ui.setProgress({ label, fraction: null });
       try {
         await fn(app);
       } catch (e) {
         app.log(e instanceof Error ? e.message : String(e), 'err');
       } finally {
         busy = false;
+        app.ui.setProgress(null);
         app.store.touch();
       }
     };
@@ -155,15 +160,29 @@ export function wireUi(app: App): void {
     };
   }
 
+  // Feed a long read's byte progress to the on-screen bar. Named by the running operation
+  // (busyLabel), with the region and byte/elapsed detail underneath.
+  function showReadProgress(p: ReadProgress): void {
+    app.ui.setProgress({
+      label: busyLabel || p.label,
+      fraction: p.total ? p.done / p.total : null,
+      detail: p.label + ': ' + p.done.toLocaleString() + ' / ' + p.total.toLocaleString() + ' bytes · ' + p.elapsedS.toFixed(0) + 's',
+    });
+  }
+
   // ---- connect (not guarded: there is no Connection yet) ----
   $<HTMLButtonElement>('#connect').onclick = () => {
     void (async () => {
       const btn = $<HTMLButtonElement>('#connect');
       btn.disabled = true;
       const pref = $<HTMLSelectElement>('#transport').value as TransportMode;
+      app.ui.setProgress({ label: 'connect', fraction: null });
       try {
         await doConnect(app, pref);
+        // A fresh Connection is created on every connect — point its progress at the bar.
+        if (app.conn) app.conn.onProgress = showReadProgress;
       } finally {
+        app.ui.setProgress(null);
         render(app.store.get());
       }
     })();
