@@ -65,6 +65,18 @@ test('Read Block is rejected on the ES10 model (tryBlock → null)', async () =>
   assert.equal(r, null);
 });
 
+test('program/password are read at the BARE addresses (0x0000____), not the 0x00FF____ page', async () => {
+  // The fake responds only at the hardware-verified addresses (bare below 0x1F00). If the tool's
+  // ADDR.PROGRAM / ADDR.PWD_MEM regressed to 0x00FF____, these reads would return zeros.
+  const { c, d } = make({ passwordExists: false, password: 'ok', program: new Uint8Array([0xde, 0xad]) });
+  assert.deepEqual([...(await c.readRegion(ADDR.PROGRAM, 2, 'p'))], [0xde, 0xad]);
+  assert.equal(await c.readByte(ADDR.PWD_MEM), 'o'.charCodeAt(0));
+  // and the address bytes actually put on the wire are bare:
+  const progRead = d.writes.find((w) => w[0] === 0x02 && w[4] === 0xe8);
+  assert.ok(progRead);
+  assert.deepEqual([...progRead.slice(1, 5)], [0x00, 0x00, 0x0e, 0xe8]);
+});
+
 test('Read Block returns data (with valid XOR) when the device supports it', async () => {
   const prog = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   const { c } = make({ blockReadsWork: true, program: prog });

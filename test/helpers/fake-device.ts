@@ -5,16 +5,32 @@
 // cleartext, whether Read Block works) to cover both the leaking-0BA5 and the holding-ES10 cases.
 
 import type { Transport } from '../../src/transport/types.js';
-import { ADDR } from '../../src/pg/constants.js';
+
+// Hardware-verified wire addresses the device actually responds at — defined HERE, independently
+// of the tool's src/pg/constants, so the fake is a ground-truth oracle. If the tool ever reads
+// the wrong address (e.g. the old 0x00FF0566 instead of the bare 0x00000566), the fake returns
+// zero and the test fails. Rule (from LSC Logo6.getAdress): addresses ≥ 0x1F00 get the 0x00FF
+// page; below that they stay bare 0x0000____.
+const HW = {
+  PWD_MEM: 0x00000566, // bare (< 0x1F00)
+  PROGRAM: 0x00000ee8, // bare
+  PWD_EXISTS: 0x00ff48ff, // ≥ 0x1F00 → paged
+  PWD_MAGIC1: 0x00ff1f00,
+  PWD_MAGIC2: 0x00ff1f01,
+  IDENT: 0x00ff1f02,
+  FW_START: 0x00ff1f03,
+  CLEAR: 0x00ff4800, // ADR_CLEAR_PASSWORD_ACTIVE
+  SET: 0x00ff4801, // ADR_SET_PASSWORD_ACTIVE
+} as const;
 
 export interface FakeDeviceConfig {
   identNo?: number; // connect reply; default 0x45 (0BA6.ES10)
   mode?: number; // 0x42 STOP / 0x01 RUN; default STOP
   passwordExists?: boolean; // 0x48FF === 0x40; default false
-  leaksCleartext?: boolean; // does level-1 reveal 0566/program? default false (ES10 holds)
+  leaksCleartext?: boolean; // does the firmware leak the cleartext? default false (ES10 holds)
   blockReadsWork?: boolean; // does Read Block 0x05 succeed? default false (ES10 rejects)
   password?: string; // stored cleartext (≤10 chars)
-  program?: Uint8Array; // bytes at 0x00FF0EE8
+  program?: Uint8Array; // bytes at the bare 0x00000EE8
 }
 
 const FW = 'V10707'; // 1F03..1F08 → decodes to firmware "V1.07.07"
@@ -45,19 +61,19 @@ export class FakeDevice implements Transport {
     this.mode = config.mode ?? 0x42;
 
     // System registers — always readable.
-    this.sys.set(ADDR.PWD_MAGIC1, 0x04);
-    this.sys.set(ADDR.PWD_MAGIC2, 0x00);
-    this.sys.set(ADDR.IDENT, 0x42);
-    for (let i = 0; i < FW.length; i++) this.sys.set(ADDR.FW_START + i, FW.charCodeAt(i));
-    this.sys.set(ADDR.PWD_EXISTS, this.cfg.passwordExists ? 0x40 : 0x00);
+    this.sys.set(HW.PWD_MAGIC1, 0x04);
+    this.sys.set(HW.PWD_MAGIC2, 0x00);
+    this.sys.set(HW.IDENT, 0x42);
+    for (let i = 0; i < FW.length; i++) this.sys.set(HW.FW_START + i, FW.charCodeAt(i));
+    this.sys.set(HW.PWD_EXISTS, this.cfg.passwordExists ? 0x40 : 0x00);
 
     // Password store: on a leaking device it is exposed as soon as it's queried (LOGO!Soft reads
     // it before writing anything). The clear write is not needed to see it.
     const pw = config.password ?? 'secret';
-    for (let i = 0; i < 10; i++) this.pwdMem.set(ADDR.PWD_MEM + i, i < pw.length ? pw.charCodeAt(i) : 0x00);
+    for (let i = 0; i < 10; i++) this.pwdMem.set(HW.PWD_MEM + i, i < pw.length ? pw.charCodeAt(i) : 0x00);
     // Program memory: protected until the clear write drops protection (on a leaking device).
     const prog = config.program ?? new Uint8Array(0);
-    for (let i = 0; i < prog.length; i++) this.progMem.set(ADDR.PROGRAM + i, prog[i]);
+    for (let i = 0; i < prog.length; i++) this.progMem.set(HW.PROGRAM + i, prog[i]);
   }
 
   /** Password store readable: no password, or the firmware leaks the cleartext (no write needed). */
@@ -143,10 +159,12 @@ export class FakeDevice implements Transport {
     if (op === 0x01) {
       // Write Byte → ACK. Protection registers change the effective level.
       const a = FakeDevice.addr(cmd);
-      // 0x4800 (LSC clear) and legacy 0x4740 lower protection; 0x4801 (LSC set) and legacy
-      // 0x4100 re-lock. Whether a lowered level actually opens reads is gated by leaksCleartext.
-      if (a === ADDR.PL_CLEAR || a === ADDR.PL_LEVEL1) this.protectionLowered = true;
-      else if (a === ADDR.PL_SET || a === ADDR.PL_LEVEL3) this.protectionLowered = false;
+      // Only the real registers move protection: 0x4800 clears, 0x4801 re-locks. A write to the
+      // wrong register (e.g. the old brickpool 0x4740) is ACK'd but does nothing — so a tool
+      // using the wrong clear address fails to open the program in tests. Whether a cleared level
+      // actually exposes the program is further gated by leaksCleartext.
+      if (a === HW.CLEAR) this.protectionLowered = true;
+      else if (a === HW.SET) this.protectionLowered = false;
       this.push(0x06);
       return;
     }
