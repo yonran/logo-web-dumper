@@ -4,7 +4,7 @@ import type { App } from '../app.js';
 import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { decodeCombined } from '../decode/program.js';
 import { downloadBytes } from '../util/dom.js';
-import { ensureStopped } from './common.js';
+import { deviceSlug, ensureStopped } from './common.js';
 
 /**
  * Read the pointer table, wiring, and program via Read Byte, save the combined dump, and
@@ -18,7 +18,7 @@ export async function readAllAndDecode(app: App): Promise<void> {
   const prot = await conn.readByte(ADDR.PWD_EXISTS);
   app.store.set({ protected: isPasswordSet(prot) });
   if (isPasswordSet(prot) && !app.store.get().unlocked) {
-    app.log('Program is PASSWORD-PROTECTED (0x00FF48FF=0x40) and not unlocked — a read would return all zeros. Press “3 · Recover password & unlock” first. Nothing read or saved.', 'err');
+    app.log('Program is PASSWORD-PROTECTED (0x00FF48FF=0x40) and not unlocked — a read would return all zeros. Press “3 · Recover password & attempt unlock” first. Nothing read or saved.', 'err');
     return;
   }
   app.log('Reading pointer table, wiring, and program via Read Byte (~2460 bytes, ~30-60s)…', 'mut');
@@ -39,10 +39,11 @@ export async function readAllAndDecode(app: App): Promise<void> {
   full.set(ptr, 0);
   full.set(term, 260);
   full.set(prog, 460);
-  downloadBytes('logo_0ba6_full.bin', full);
+  const fname = 'logo_' + deviceSlug(conn.deviceName) + '_full.bin';
+  downloadBytes(fname, full);
   app.ui.setNetlist(decodeCombined(full));
   app.store.set({ dumped: true });
-  app.log('Decoded. Combined dump saved as logo_0ba6_full.bin (' + nz + ' non-zero program bytes; re-decodable with the file button).', 'ok');
+  app.log('Decoded. Combined dump saved as ' + fname + ' (' + nz + ' non-zero program bytes; re-decodable with the file button).', 'ok');
 }
 
 /** Decode a saved combined dump (.bin) offline. */
