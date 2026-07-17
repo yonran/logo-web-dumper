@@ -287,6 +287,7 @@ export class Connection {
   async readRegionViaBlock(addr: number, count: number, label: string, chunk = 512): Promise<Uint8Array> {
     const out = new Uint8Array(count);
     const t0 = Date.now();
+    let done = 0;
     for (let off = 0; off < count; off += chunk) {
       if (this.abort) {
         this.logger.log('  aborted at ' + off + '/' + count, 'err');
@@ -299,11 +300,18 @@ export class Connection {
         break;
       }
       out.set(data, off);
-      const pct = Math.round(((off + n) / count) * 100);
+      done = off + n;
+      const pct = Math.round((done / count) * 100);
       const el = (Date.now() - t0) / 1000;
-      this.logger.log('  ' + label + ': ' + (off + n) + '/' + count + ' bytes (' + pct + '%), ' + el.toFixed(0) + 's elapsed', 'mut');
+      this.logger.log('  ' + label + ': ' + done + '/' + count + ' bytes (' + pct + '%), ' + el.toFixed(0) + 's elapsed', 'mut');
     }
-    this.logger.log('  ' + label + ': read via Read Block (' + chunk + '-byte chunks).', 'ok');
+    // Only claim success if the whole region actually came back — a green "read via Read Block"
+    // after an early break (the ES10, which rejects Read Block) would falsely imply a good dump.
+    if (done === count) {
+      this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block (' + chunk + '-byte chunks).', 'ok');
+    } else {
+      this.logger.log('  ' + label + ': INCOMPLETE — ' + done + '/' + count + ' bytes via Read Block; the rest is zero-filled.', 'err');
+    }
     return out;
   }
 
@@ -388,8 +396,12 @@ export class Connection {
     } else if (r.length && r[0] === OP.NOK) {
       const e = await this.xport.read(1, 800);
       this.logger.log('STOP rejected: NOK code ' + (e.length ? cpuErrText(e[0]) : '?'), 'err');
+    } else if (r.length) {
+      this.logger.log('STOP: unexpected response ' + hex(r) + '.', 'err');
     } else {
-      this.logger.log('STOP: unexpected response.', 'err');
+      // No reply is the OBSERVED answer when the device is ALREADY in STOP (0BA6.ES10) — not an
+      // error. The caller's mode query authoritatively confirms the state right after this.
+      this.logger.log('STOP: no ack — the device is likely ALREADY in STOP (the mode query below confirms).', 'mut');
     }
     await this.drain('stop');
   }
