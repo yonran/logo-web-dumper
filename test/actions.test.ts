@@ -34,10 +34,18 @@ test('doStop on an unprotected device: protected=false, no re-lock caveat', asyn
 test('unlock on a non-leaking ES10: write is sent but reads stay zero → UNLOCK DID NOT TAKE', async () => {
   const h = makeHarness({ passwordExists: true, leaksCleartext: false, password: 'topsecret' });
   await recoverPasswordAndUnlock(h.app);
-  assert.equal(h.store.get().unlocked, true);
+  // A failed unlock must NOT report the device as unlocked (the decode guard depends on this).
+  assert.equal(h.store.get().unlocked, false);
   assert.ok(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00));
   assert.ok(logged(h.logger, 'UNLOCK DID NOT TAKE'));
   assert.ok(logged(h.logger, 'still all zero'));
+});
+
+test('a successful unlock DOES set unlocked=true (leaking device)', async () => {
+  const prog = new Uint8Array(16).fill(0x5a);
+  const h = makeHarness({ passwordExists: true, leaksCleartext: true, password: 'pw', program: prog });
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, true);
 });
 
 test('unlock on a leaking device: cleartext recovered and program readable', async () => {

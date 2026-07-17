@@ -32,8 +32,12 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
   app.log('Password is set (magic bytes OK). Beginning the recovery write (PROTOCOL.md §3.4) — THIS WRITES to the PLC protection register 0x00FF4740.', 'mut');
   // The single write: lower protection to level 1 (no protection). Reversible with Re-lock.
   await conn.writeByte(ADDR.PL_LEVEL1, 0x00);
-  // Record unprotected state immediately so the Re-lock warning prints no matter what fails.
-  app.store.set({ unlocked: true, protected: true });
+  // A protection-lowering write was sent, so record that a password exists (this keeps Re-lock
+  // enabled and the warning below meaningful). Do NOT claim read access is open yet — that is
+  // only true if the reads below actually return data. Setting `unlocked` optimistically here
+  // would let the decode step skip its protection guard and dump a still-protected device.
+  app.store.set({ protected: true });
+  let opened = false;
   try {
     // The device appears to latch its protection level at connection (0x21) time, so a
     // mid-session level change may not take effect until we re-negotiate. Reconnect.
@@ -54,6 +58,7 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
     let nz = 0;
     for (const d of test) if (d) nz++;
     if (nz > 0) {
+      opened = true;
       app.log('Read access OPEN — 0x00FF0EE8 returns real data now (' + nz + '/16 non-zero: ' + hex(test) + '). Run “4 · Read program & decode”.', 'ok');
     } else {
       app.log('UNLOCK DID NOT TAKE: the program and password areas still read all-zero after the protection write + reconnect.', 'err');
@@ -61,6 +66,10 @@ export async function recoverPasswordAndUnlock(app: App): Promise<void> {
       app.log('Options: (a) power-cycle the LOGO, reconnect, and try step 3 again (some protection changes need a reboot); (b) if you KNOW the password, that opens other routes; (c) otherwise the protected program may not be dumpable without LOGO!Soft + the password.', 'mut');
     }
   } finally {
+    // Reflect the real outcome: `unlocked` means read access actually opened. A failed unlock
+    // leaves it false so the decode guard still blocks; Re-lock stays enabled because a
+    // password exists (protected===true), and the warning below always prints.
+    app.store.set({ unlocked: opened });
     app.log('⚠️ A protection-level write was sent (level 1). Press “5 · Re-lock” to restore protection when done.', 'err');
   }
 }
@@ -88,7 +97,8 @@ export async function recoverNoReneg(app: App): Promise<void> {
   }
   app.log('Magic OK. Writing 0x00FF4740=0x00 and reading 0x00FF0566 back-to-back — NO restart in between.', 'mut');
   await conn.writeByte(ADDR.PL_LEVEL1, 0x00);
-  app.store.set({ unlocked: true, protected: true });
+  app.store.set({ protected: true });
+  let opened = false;
   try {
     // The crux: NO restart / connect here. Read straight away in the same session.
     const pw = await conn.readRegion(ADDR.PWD_MEM, 10, 'password area (no-reneg)');
@@ -99,11 +109,13 @@ export async function recoverNoReneg(app: App): Promise<void> {
     let nz = 0;
     for (const d of test) if (d) nz++;
     if (pwnz || nz > 0) {
+      opened = true;
       app.log('RESULT: reads returned real data WITHOUT a re-negotiate (' + nz + '/16 program bytes non-zero: ' + hex(test) + '). The inserted Restart in step 3 was defeating the unlock. Use step 4 to dump.', 'ok');
     } else {
       app.log('RESULT: still all zero even back-to-back in the same session. The re-negotiate was NOT the cause — this firmware genuinely holds read protection after a level-1 write.', 'err');
     }
   } finally {
+    app.store.set({ unlocked: opened });
     app.log('⚠️ A protection-level write was sent (level 1). Press “5 · Re-lock” to restore protection when done.', 'err');
   }
 }

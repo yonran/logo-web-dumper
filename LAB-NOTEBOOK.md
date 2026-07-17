@@ -83,7 +83,7 @@ The tool has carried two orderings of the read-after-write:
 | Variant | Between write and read | Result on DUT | Where |
 |---|---|---|---|
 | **E1a — back-to-back** | nothing (write → read, same session), mirrors `SetSessionPassword()` exactly | **all zero** | pre-commit `613dc04` code; run in a phone session (see 613dc04 message: *"the unlock write (0x4740=0) was ACK'd but the password (0x0566) and program (0x0EE8) still read all-zero"*) |
-| **E1b — re-negotiate** | `22` restart + `21` connect + mode, on the guess that protection "latches at connect time" | **all zero** ("UNLOCK DID NOT TAKE") | commit `613dc04` onward; current default step 3 |
+| **E1b — re-negotiate** | `22` restart + `21` connect + mode, on the guess that protection "latches at connect time" | **all zero** ("UNLOCK DID NOT TAKE") | commit `613dc04` onward; current default step 3. **Re-confirmed first-hand on real hardware 2026-07-16** (0BA6.ES10, WebUSB/CH340) with the current restart-enabled code — `01 00 ff 47 40 00 ← 06`, then `0x0566` and `0x0EE8` both read all-zero. |
 
 **Key inference (2026-07-16):** the inserted re-negotiate (E1b) is NOT what breaks the unlock —
 the back-to-back read (E1a) was tried first and *already* returned all-zero. Both orderings
@@ -97,14 +97,38 @@ and points hard at the firmware genuinely holding read protection after a level-
 
 ### E2 — clean isolated back-to-back confirmation. PENDING HARDWARE.
 
-Added a diagnostics button **"Unlock (no re-negotiate)"** (`recoverNoReneg()` in index.html)
-that does E1a in one session with nothing between the write and the read, and reports which
-branch it lands in. Purpose: turn the paraphrased E1a result into a first-hand, logged datapoint.
+Added a diagnostics button **"Unlock (no re-negotiate)"** (`recoverNoReneg()` in
+`src/actions/password.ts`) that does E1a in one session with nothing between the write and the
+read, and reports which branch it lands in. Purpose: turn the paraphrased E1a result into a
+first-hand, logged datapoint.
 
 Predicted outcome given E1a/E1b history: **still all zero** (i.e. re-negotiate was not the cause).
 A non-zero result would instead mean E1a's earlier failure had some other confound — worth knowing.
 
-**Result:** _(to be filled in after running against the DUT)_
+**Result:** _(still pending — the 2026-07-16 hardware session ran step 3 (E1b), not this button.)_
+
+### Real hardware session — 2026-07-16 (0BA6.ES10, WebUSB / CH340, fw V1.07.07)
+
+First fully first-hand run of the current code against the DUT. Confirms E1b and adds three
+findings:
+
+1. **E1b confirmed:** `01 00 ff 47 40 00 ← 06` (protection write ACK'd), then `0x0566` reads all
+   zero ("password NOT readable") and `0x0EE8 ×16` reads all zero → "UNLOCK DID NOT TAKE". A
+   subsequent full program read returned **2 non-zero bytes / 2000** — i.e. effectively empty,
+   consistent with read protection genuinely holding. **Strengthens H-A.**
+2. **Connect reply is `06 03 21 45`, not `06 55 <..> <ident>`** (four times, consistent). Only
+   byte[3] (the IdentNo) is read by the tool, so identification is unaffected. PROTOCOL.md §3.1
+   and the test fake updated to the observed bytes.
+3. **`55 12 12 AA` (STOP) got no response** on the already-stopped device; the mode query right
+   after still returned `06 42`. So an absent `06` after the STOP command is not an error.
+   PROTOCOL.md §3.3 and the fake updated.
+
+**Bug found and fixed (from this session):** after "UNLOCK DID NOT TAKE", the tool had set
+`unlocked = true` regardless, so the decode step's protection guard was bypassed and it spent
+~68 s reading a still-protected device (all zeros) and saved a junk file. `unlocked` now reflects
+*actual* read access (set only if the post-write reads return data); a failed unlock leaves it
+false so decode blocks, while Re-lock stays enabled because a password exists. Covered by the
+regression test in `test/observed-es10.test.ts`.
 
 ---
 

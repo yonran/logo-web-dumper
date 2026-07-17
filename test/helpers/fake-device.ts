@@ -89,8 +89,10 @@ export class FakeDevice implements Transport {
   private handle(cmd: Uint8Array): void {
     const op = cmd[0];
     if (op === 0x21) {
-      // Connect request → ACK, 0x55, filler, IdentNo.
-      this.push(0x06, 0x55, 0x00, this.cfg.identNo);
+      // Connect request. Observed on real 0BA6.ES10: → 21  ← 06 03 21 45, i.e. ACK, 0x03, the
+      // echoed command byte, then the IdentNo (byte[3]). The brickpool wiki documents
+      // 06 55 <..> <ident>; the ES10 differs, but the IdentNo is byte[3] either way.
+      this.push(0x06, 0x03, 0x21, this.cfg.identNo);
       return;
     }
     if (op === 0x22) {
@@ -101,10 +103,15 @@ export class FakeDevice implements Transport {
     }
     if (op === 0x55) {
       if (cmd[1] === 0x17) {
-        this.push(0x06, this.mode); // mode query
+        this.push(0x06, this.mode); // mode query → 06 <mode>
       } else if (cmd[1] === 0x12) {
-        this.mode = 0x42; // force STOP
-        this.push(0x06);
+        // Force STOP. Observed on 0BA6.ES10: a STOP command to a device ALREADY in STOP got NO
+        // response (only a real RUN→STOP transition is acknowledged with 0x06). See
+        // LAB-NOTEBOOK.md — inferred from a single observation of an already-stopped device.
+        if (this.mode !== 0x42) {
+          this.mode = 0x42;
+          this.push(0x06);
+        }
       } else if (cmd[1] === 0x18) {
         this.mode = 0x01; // force RUN
         this.push(0x06);

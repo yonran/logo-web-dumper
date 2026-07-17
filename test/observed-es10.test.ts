@@ -10,6 +10,7 @@ import { Logger } from '../src/log.js';
 import { ADDR } from '../src/pg/constants.js';
 import { readFirmware } from '../src/actions/diagnostics.js';
 import { recoverNoReneg, recoverPasswordAndUnlock } from '../src/actions/password.js';
+import { readAllAndDecode } from '../src/actions/program.js';
 import { FakeDevice } from './helpers/fake-device.js';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
 
@@ -30,13 +31,27 @@ async function exchange(dev: FakeDevice, cmd: number[], n: number): Promise<numb
 
 // ---- byte-level fidelity: the fake speaks the observed wire protocol ----
 
-test('connect: → 21  ← 06 55 .. 45 (IdentNo 0x45 = 0BA6.ES10)', async () => {
+test('connect: → 21  ← 06 03 21 45 (IdentNo 0x45 = 0BA6.ES10), exactly as observed', async () => {
   const dev = new FakeDevice(ES10);
-  assert.deepEqual(await exchange(dev, [0x21], 4), [0x06, 0x55, 0x00, 0x45]);
+  assert.deepEqual(await exchange(dev, [0x21], 4), [0x06, 0x03, 0x21, 0x45]);
 });
 
 test('mode query: → 55 17 17 AA  ← 06 42 (STOP)', async () => {
   const dev = new FakeDevice(ES10);
+  assert.deepEqual(await exchange(dev, [0x55, 0x17, 0x17, 0xaa], 2), [0x06, 0x42]);
+});
+
+test('STOP command on an already-stopped device gets NO response (observed)', async () => {
+  const dev = new FakeDevice(ES10); // mode already 0x42
+  // → 55 12 12 AA  ← (nothing)
+  assert.deepEqual(await exchange(dev, [0x55, 0x12, 0x12, 0xaa], 1), []);
+  // …but the device is still in STOP, as the mode query confirms.
+  assert.deepEqual(await exchange(dev, [0x55, 0x17, 0x17, 0xaa], 2), [0x06, 0x42]);
+});
+
+test('STOP command DOES ack when it actually transitions RUN → STOP', async () => {
+  const dev = new FakeDevice({ ...ES10, mode: 0x01 }); // start in RUN
+  assert.deepEqual(await exchange(dev, [0x55, 0x12, 0x12, 0xaa], 1), [0x06]);
   assert.deepEqual(await exchange(dev, [0x55, 0x17, 0x17, 0xaa], 2), [0x06, 0x42]);
 });
 
@@ -117,6 +132,18 @@ test('unlock (E1a, no re-negotiate) also stays zero — firmware genuinely holds
   await recoverNoReneg(h.app);
   assert.ok(wroteByte(h.device, ADDR.PL_LEVEL1, 0x00));
   assert.ok(logged(h.logger, 'firmware genuinely holds'));
+});
+
+test('regression: after a failed unlock, decode BLOCKS instead of reading a protected device', async () => {
+  // Reproduces the observed hardware session: unlock did not take, then "Read program & decode"
+  // must not spend a minute reading zeros and save a junk file. The guard depends on `unlocked`
+  // reflecting real read access, not merely that a write was attempted.
+  const h = makeHarness(ES10);
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, false);
+  await readAllAndDecode(h.app);
+  assert.ok(logged(h.logger, 'PASSWORD-PROTECTED'));
+  assert.equal(h.store.get().dumped, false);
 });
 
 // ---- counterfactual: the SAME flow recovers on a leaking device, proving the fake and the

@@ -44,6 +44,11 @@ PC  → 21
 LOGO← 06 55 <..> <IdentNo>      (4 bytes; first is ACK, last is the device ident)
 ```
 
+> **Observed on real hardware (0BA6.ES10, WebUSB/CH340):** the reply is `06 03 21 45`, not
+> `06 55 <..> <ident>` — i.e. ACK, `0x03`, the echoed command byte `0x21`, then IdentNo `0x45`.
+> The `06 55 …` form above is from the brickpool wiki; the ES10 differs in bytes 1–2. Either
+> way the **IdentNo is byte[3]**, which is all this tool reads, so identification is unaffected.
+
 IdentNo values:
 
 | IdentNo | Device | Address width |
@@ -133,6 +138,12 @@ MODE:   PC → 55 17 17 AA     LOGO! → 06 <mode>
 | `42` | STOP |
 
 Memory reads (and firmware/clock reads) require STOP. Rather than assuming, query the mode with `55 17 17 AA` and check for `06 42`.
+
+> **Observed on real hardware (0BA6.ES10):** sending `55 12 12 AA` to a device **already in
+> STOP** produced **no response** — only a real RUN→STOP transition appears to be acknowledged
+> with `06`. This is harmless here (the tool queries the mode with `55 17 17 AA` afterwards and
+> confirms STOP regardless), but it means an absent `06` after the STOP command is not itself an
+> error. Inferred from a single observation of an already-stopped device.
 
 Source: brickpool/logo `src/LogoPG.cpp` — `LOGO_STOP` / `LOGO_START` / `LOGO_MODE`, `GetPlcStatus()`, `RecvControlResponse()`; PG-Protocol wiki "Memory Access".
 
