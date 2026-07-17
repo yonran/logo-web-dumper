@@ -12,7 +12,7 @@ import type { Transport } from '../../src/transport/types.js';
 const BASE = {
   PWD_MEM: 0x0566,
   PROGRAM_LEGACY: 0x0ee8, // 0BA4/0BA5 program body (bare, < 0x1F00)
-  PROGRAM_0BA6: 0x3292, // 0BA6 program body (LSC Logo6 map; ≥ 0x1F00 → paged to 0x00FF3292)
+  PROGRAM_0BA6: 0x3292, // 0BA6 program body (LSC Logo6 map; BARE wire 0x00003292 — Memory reads aren't paged)
   PWD_EXISTS: 0x48ff,
   PWD_MAGIC1: 0x1f00,
   PWD_MAGIC2: 0x1f01,
@@ -90,16 +90,21 @@ export class FakeDevice implements Transport {
     }
     // Program memory: protected until the clear write drops protection (on a leaking device).
     // The body lives at the device family's program base — 0x3292 on 0BA6, 0x0EE8 on 0BA4/0BA5 —
-    // so a tool that reads the wrong family's map gets nothing back.
+    // read via progWire (BARE, no 0xFF page: Memory.upload does not go through getAdress).
     const progBase = this.addrWidth === 4 ? BASE.PROGRAM_0BA6 : BASE.PROGRAM_LEGACY;
     const prog = config.program ?? new Uint8Array(0);
-    for (let i = 0; i < prog.length; i++) this.progMem.set(this.wire(progBase + i), prog[i]);
+    for (let i = 0; i < prog.length; i++) this.progMem.set(this.progWire(progBase + i), prog[i]);
   }
 
-  /** Wire address for this device: bare 16-bit on 0BA5; on 0BA6 the ≥0x1F00 page (LSC getAdress). */
+  /** Wire address for a SYMBOLIC register: bare 16-bit on 0BA5; on 0BA6 the ≥0x1F00 page (getAdress). */
   private wire(base: number): number {
     if (this.addrWidth === 2) return base & 0xffff;
     return base >= 0x1f00 ? (base | 0xff0000) >>> 0 : base;
+  }
+
+  /** Wire address for a MEMORY block (program/offset table): raw base, NEVER paged (readByteArray). */
+  private progWire(base: number): number {
+    return this.addrWidth === 2 ? base & 0xffff : base >>> 0;
   }
 
   // Whether the password STORE (0x0566) hands back bytes — independent of the program.

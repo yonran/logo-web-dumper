@@ -267,27 +267,35 @@ layout. This tool selects the map from the detected IdentNo (see `src/pg/device.
 | Output/marker wiring | `0E20` | `0x00000E20` | ~200 |
 | Program memory | `0EE8` | `0x00000EE8` | 2000 |
 
-**0BA6 / ES3 / ES10 (LSC `Logo6.getMemories`; ES10 = `Logo6Update2`, which inherits it) — high, paged:**
+**0BA6 / ES3 / ES10 (LSC `Logo6.getMemories`; ES10 = `Logo6Update2`, which inherits it) — high, but BARE on the wire:**
 
 | Region | base | wire | Bytes |
 |---|---|---|---|
-| Program-offset table | `2FAA` | `0x00FF2FAA` | — |
-| Anchors (Q/M/AM wiring) | `31CA` | `0x00FF31CA` | — |
-| **Program memory** | `3292` | **`0x00FF3292`** | — |
-| Whole upload image | `2FAA…` | `0x00FF2FAA` + **13464** | `getNumberOfUploadTransferBytes` |
+| Program-offset table | `2FAA` | `0x00002FAA` | — |
+| Anchors (Q/M/AM wiring) | `31CA` | `0x000031CA` | — |
+| **Program memory** | `3292` | **`0x00003292`** | — |
+| Whole upload image | `2FAA…` | `0x00002FAA` + **13464** | `getNumberOfUploadTransferBytes` |
 
-The tool reads the 0BA6 program as one contiguous **13464-byte** image from `0x00FF2FAA`. It is saved
-raw; there is **no 0BA6 netlist decoder yet** (the `Logo6` offset-table/block format is not reversed).
-Only the legacy 2460-byte 0BA4/0BA5 layout is decoded to a netlist.
+The tool reads the 0BA6 program as one contiguous **13464-byte** image from the bare `0x00002FAA`. It is
+saved raw; there is **no 0BA6 netlist decoder yet** (the `Logo6` offset-table/block format is not
+reversed). Only the legacy 2460-byte 0BA4/0BA5 layout is decoded to a netlist.
 
-> 🔴 **Two corrections got us here.** (1) Earlier the tool paged **every** address, reading the
-> password/program at `0x00FF0566` / `0x00FF0EE8` — wrong, since they are below `0x1F00`. (2) Even
-> after fixing that, `0C14`/`0E20`/`0EE8` turned out to be the **0BA4** map (LSC `Logo4`); on the
-> 0BA6.ES10 those read `0xFF` (empty). The real 0BA6 program is high and paged at `0x00FF3292`.
-> Confirmed on hardware: with the corrected clear register the password store leaked and decoded to a
-> real password (see LAB-NOTEBOOK).
+> 🔴 **These program addresses are BARE, not paged.** The `≥0x1F00 → OR 0xFF0000` paging lives in
+> `getAdress`, which is used for the *symbolic register* reads (flag `0x48FF`, magic `0x1F00`,
+> protection `0x4800`). But the program/offset-table/wiring are `Memory` objects read via
+> `Memory.upload → DataTransfer.readByteArray(rawBase)`, which **never calls `getAdress`** — the raw
+> `Memory` base goes on the wire as `0x0000____`. (The `Memory` constructor stores the base verbatim
+> into `fTransferStartAdress`; `writeCommandAddress` just emits its 4 bytes.) An earlier version of
+> this doc/tool wrongly paged them to `0x00FF3292`; those read `0x00` on the ES10.
 
-Source: LOGO!Soft Comfort V8.0 bytecode — `DE.siemens.ad.logo.model.hardware.Logo6.getAdress` (the `addr >= 0x1F00 ? addr | 0xFF0000 : addr` rule).
+> 🔴 **History.** (1) The very first version paged *everything*, reading password/program at
+> `0x00FF0566`/`0x00FF0EE8`. (2) Then `0C14`/`0E20`/`0EE8` turned out to be the **0BA4** map. (3) The
+> `Logo6` bases `2FAA`/`31CA`/`3292` are correct but must be sent **bare**, not paged. NOTE: even at
+> the bare `0x00003292`, the program body reads `0x00` on the ES10 after the `0x4800` clear write —
+> read protection is still holding; the password recovery works but the program read does not (see
+> LAB-NOTEBOOK). This addressing is decompiler-derived and not yet confirmed by a non-zero hardware read.
+
+Source: LOGO!Soft Comfort V8.0 bytecode — `Logo6.getAdress` (the `addr >= 0x1F00 ? addr | 0xFF0000 : addr` rule, for symbolic reads only); `Memory`/`Memory.upload` + `DataTransfer.readByteArray`/`writeCommandAddress` (raw base, no paging).
 
 Source: 0BA5 addresses from brickpool/logo 0BA5-Dekodierung wiki (Appendix A / Adressübersicht) and PG-Protocol wiki (Appendix A). 0BA6 `0x00FF____` prefix from the `ADDR_*` constants in `src/LogoPG.cpp`.
 

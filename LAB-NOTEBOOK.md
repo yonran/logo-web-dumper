@@ -37,16 +37,29 @@ Convention: `→` = PC→LOGO, `←` = LOGO→PC. All addresses 4-byte big-endia
   an artifact of wrong addresses.
 - **But the whole 2460-byte program dump was `0xFF`.** Cause: `0x0C14`/`0x0E20`/`0x0EE8` are LSC's
   **`Logo4` (0BA4)** map. The DUT is a 0BA6 (`Logo6`; ES10 = `Logo6Update2`, getID `0x45`, which
-  does NOT override `getMemories`). The correct **0BA6** map (from `Logo6.getMemories`; getAdress
-  ORs `0xFF0000` for addr ≥ `0x1F00`):
-  - Program-offset table `0x2FAA` → wire `0x00FF2FAA`
-  - Anchors (Q/M/AM wiring) `0x31CA` → wire `0x00FF31CA`
-  - **Program `0x3292` → wire `0x00FF3292`**; total image `getNumberOfUploadTransferBytes` = **13464 bytes**
-  - Low block-name tables stay bare: BlocknamenTabelle `0x0688`, Blocknamen `0x0708`, Message RTF `0x0AA8`
-- **Tool change:** the program map is now per-device in `DeviceProfile.mem` (0BA4/0BA5 legacy low
-  map vs 0BA6 high paged map). “Read program & save raw” reads the whole 13464-byte image contiguously
-  from `0x00FF2FAA` and saves it raw (no 0BA6 netlist decoder yet). Next: capture that image on
-  hardware and reverse the 0BA6 offset-table/block format.
+  does NOT override `getMemories`). The 0BA6 map is `Logo6.getMemories`: ProgOffsetTabelle `0x2FAA`,
+  Anchors `0x31CA`, Program `0x3292`; total image = **13464 bytes**; block-name tables `0x0688`/`0x0708`/`0x0AA8`.
+
+### 2026-07-17 (later) — CORRECTIONS: 0BA6 program addrs are BARE; unlock recovers password but NOT program reads
+
+- **The 0BA6 program addresses are BARE (`0x0000____`), NOT paged.** The `≥0x1F00 → OR 0xFF0000`
+  paging is in `getAdress`, used for the *symbolic register* reads (flag/magic/protection). The
+  program/offset-table/wiring are `Memory` objects read via `Memory.upload → readByteArray(rawBase)`,
+  which never calls `getAdress`. So wire addresses are **offset table `0x00002FAA`, anchors
+  `0x000031CA`, program `0x00003292`** — an earlier note here (paged `0x00FF3292`) was wrong.
+- **Full LSC protected-program sequence traced** (`Logo6.uploadProgram` → `Logo5.uploadProgram` →
+  `Modular0.prepareUpload`): `Logo.prepareUpload` (SW-version check) + `checkPassword` (read `0x0566`,
+  compare on host, `clearPasswordOnLogo` = write `0x4800=0`) → `uploadBlocks` (read the memories) →
+  `informUploadFinished` (write `ADR_UPLOADING_FINISHED_FLAG=0`, a *post*-read cleanup). **No mode
+  change, no pre-read flag, no second protection write** — identical to what this tool does.
+- **The earlier "reads changed from 0x00 to non-0x00 — protection lowered" claim was a FALSE
+  POSITIVE** from reading the unmapped 0BA4 address (`0x0EE8` reads `0xFF` = unmapped, not "opened").
+  With the corrected probe: after `0x4800=0`, Read Byte at bare `0x00003292` (and 2000 bytes from
+  there) = **all `0x00`**; Read Block there/at the paged addr = `0x03` illegal-access. So on this
+  ES10 the password recovery works (`RHOMBUS`) but the `0x4800` write does **not** open program reads.
+- **Open:** is the program block-read-only (try BARE Read Block `05 00 00 32 92`)? Is the offset table
+  at `0x00002FAA` readable while the body is protected? Or does the ES10 firmware simply hold read
+  protection that `0x4800` doesn't defeat? Next hardware run: full bare image `0x00002FAA`/13464.
 
 ---
 
@@ -195,10 +208,11 @@ This fits every observation exactly: every address the tool read successfully is
 < `0x1F00` (`0566`, `0EE8`, `0570`, `0C14`, `0E20`). **We had been reading the program/password at
 `0x00FF0566` / `0x00FF0EE8`. The password correction remains valid (`0x00000566`), but the
 program conclusion here was later superseded: `0x00000EE8` is the legacy 0BA4/0BA5 map; the 0BA6
-program body is `0x00FF3292` and its full upload image starts at `0x00FF2FAA` (see the current
-conclusion at the top of this notebook).**
-So a read of `0x00` was "wrong/unmapped address", not "protected" — and the `0x4800` clear may
-have been working the whole time while we read the wrong place.
+program body is the bare `0x00003292` and its full upload image starts at the bare `0x00002FAA`
+(see the 2026-07-17 corrections at the top of this notebook).**
+So a read of `0x00` was "wrong/unmapped address", not "protected" — BUT the corrected bare
+`0x00003292` also reads `0x00` after `0x4800=0`, so on the ES10 the clear write does not open
+program reads regardless (the "clear was working while we read the wrong place" hope did not pan out).
 
 **Tool change:** program-region addresses (`PWD_MEM`, `PROGRAM`, `PROG_NAME`, `PTR_TABLE`,
 `OUT_WIRING`) dropped from `0x00FF____` to bare `0x0000____`; system registers unchanged. Pending

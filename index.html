@@ -101,12 +101,12 @@
       <button id="nametest" class="sec" disabled>Read program name</button>
     </div>
     <div class="row">
-      <label>Start addr (hex) <input id="addr" value="00FF2FAA"></label>
+      <label>Start addr (hex) <input id="addr" value="00002FAA"></label>
       <label>Length (bytes) <input id="len" value="13464"></label>
       <button id="dump" class="sec" disabled>Dump raw region &rarr; .bin</button>
     </div>
     <p class="mut" style="font-size:12.5px;margin:6px 0 0">
-      Debugging aids. The detected model supplies these defaults: the complete 0BA6 upload image is <code>13464</code> bytes from <code>0x00FF2FAA</code> (program body <code>0x00FF3292</code>); the complete legacy 0BA5 image is assembled from <code>0x0C14</code>, <code>0x0E20</code>, and <code>0x0EE8</code>. The password store remains bare at <code>0x00000566</code>. Long captures use dependable single-byte reads; unlock diagnosis may try Read Block as a fallback. Uniform <code>0x00</code> or <code>0xFF</code> captures are saved because they can prove protection, emptiness, or a wrong map.
+      Debugging aids. The detected model supplies these defaults: the complete 0BA6 upload image is <code>13464</code> bytes from the bare <code>0x00002FAA</code> (program body <code>0x00003292</code>) — the program/offset-table are <code>Memory</code> reads, which are NOT paged, unlike the <code>0x00FF____</code> system registers; the complete legacy 0BA5 image is assembled from <code>0x0C14</code>, <code>0x0E20</code>, and <code>0x0EE8</code>. The password store is bare at <code>0x00000566</code>. Long captures use dependable single-byte reads; unlock diagnosis may try Read Block as a fallback. Uniform <code>0x00</code> or <code>0xFF</code> captures are saved because they can prove protection, emptiness, or a wrong map.
     </p>
   </div>
 </details>

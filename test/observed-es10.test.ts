@@ -62,23 +62,23 @@ test('password exists: Read Byte 0x00FF48FF → 0x40', async () => {
 
 test('protected program byte reads back 0x00 via Read Byte (no fault)', async () => {
   const dev = new FakeDevice({ ...ES10, program: new Uint8Array([0xab]) });
-  // The 0BA6 program lives at 0x3292 → paged wire 0x00FF3292: the byte is 0xAB but protection
-  // holds → 0x00. (This genuinely exercises protection; the old 0BA4 address 0x0EE8 is unmapped
-  // on a 0BA6 and would read 0x00 regardless.)
-  assert.deepEqual(await exchange(dev, [0x02, 0x00, 0xff, 0x32, 0x92], 7), [0x06, 0x03, 0x00, 0xff, 0x32, 0x92, 0x00]);
+  // The 0BA6 program lives at BARE wire 0x00003292 (Memory reads aren't paged): the byte is 0xAB
+  // but protection holds → 0x00. (Genuinely exercises protection; the old 0BA4 address 0x0EE8 and
+  // the paged 0x00FF3292 are both unmapped on a 0BA6 and would read 0x00 regardless.)
+  assert.deepEqual(await exchange(dev, [0x02, 0x00, 0x00, 0x32, 0x92], 7), [0x06, 0x03, 0x00, 0x00, 0x32, 0x92, 0x00]);
 });
 
 test('Read Block replies 06 THEN 15 03 (pre-parse ACK, then exception) — PROTOCOL.md §3.2', async () => {
   const dev = new FakeDevice(ES10);
-  // → 05 00 ff 32 92 07 d0  (0BA6 program 0x00FF3292, count 0x07D0). The ES10 rejects Read Block
+  // → 05 00 00 32 92 07 d0  (0BA6 program BARE 0x00003292, count 0x07D0). The ES10 rejects Read Block
   // before parsing the address, so the 06-then-15-03 rejection is the same at any address.
-  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0xff, 0x32, 0x92, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
+  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0x00, 0x32, 0x92, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
 });
 
 test('a single exception latches the session until Restart (PROTOCOL.md §3.2a)', async () => {
   const dev = new FakeDevice(ES10);
   // Read Block faults and latches.
-  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0xff, 0x32, 0x92, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
+  assert.deepEqual(await exchange(dev, [0x05, 0x00, 0x00, 0x32, 0x92, 0x07, 0xd0], 3), [0x06, 0x15, 0x03]);
   // Now even a normally-readable Read Byte (ident anchor 1F02) is refused.
   assert.deepEqual(await exchange(dev, [0x02, 0x00, 0xff, 0x1f, 0x02], 7), [0x15, 0x03]);
   // Restart clears it …
@@ -134,12 +134,13 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
   assert.equal(h.store.get().dumped, false);
 });
 
-test('0BA6 read pulls the program image from the Logo6 map (0x00FF2FAA), not the 0BA4 0x0EE8', async () => {
+test('0BA6 read pulls the program image from the Logo6 map (bare 0x00002FAA), not the 0BA4 0x0EE8', async () => {
   const h = makeHarness({ ...ES10, passwordExists: false, program: new Uint8Array(16).fill(0x5a) }); // unprotected → readable
   await readAllAndDecode(h.app);
-  // The image read addresses the 0BA6 offset-table base 0x00FF2FAA (00 ff 2f aa) — the correct map.
-  const imgRead = h.device.writes.find((w) => w[0] === 0x02 && w[2] === 0xff && w[3] === 0x2f && w[4] === 0xaa);
-  assert.ok(imgRead, 'reads the 0BA6 image base 0x00FF2FAA');
+  // The image read addresses the 0BA6 offset-table base BARE 0x00002FAA (00 00 2f aa) — Memory reads
+  // aren't paged, so this is 0x0000____, not the 0x00FF____ of the symbolic register reads.
+  const imgRead = h.device.writes.find((w) => w[0] === 0x02 && w[2] === 0x00 && w[3] === 0x2f && w[4] === 0xaa);
+  assert.ok(imgRead, 'reads the 0BA6 image base 0x00002FAA');
   // The full 13464-byte image is saved, with the program body at offset 0x3292-0x2FAA = 744.
   assert.equal(h.ui.downloads.length, 1);
   assert.equal(h.ui.downloads[0].bytes.length, 13464);

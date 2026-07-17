@@ -79,17 +79,18 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('0BA6 map on the wire: password bare 0x00000566, program paged 0x00FF3292', async () => {
-  // The fake stores the password at bare 0x0566 (< 0x1F00) and the 0BA6 program at 0x3292
-  // (≥ 0x1F00 → paged). If the tool regressed to the 0BA4 program (bare 0x0EE8) these would be zero.
+test('0BA6 map on the wire: password AND program are BARE (0x00000566 / 0x00003292)', async () => {
+  // The program is a Memory read (readByteArray on the raw base), so it is NOT paged — bare
+  // 0x00003292. Only symbolic register reads get the 0xFF page. If the tool regressed to the paged
+  // 0x00FF3292 or the 0BA4 program 0x0EE8, these would read zero.
   const { c, d } = make({ passwordExists: false, password: 'ok', program: new Uint8Array([0xde, 0xad]) });
   assert.deepEqual([...(await c.readRegion(c.mem.programBase, 2, 'p'))], [0xde, 0xad]);
   assert.equal(await c.readByte(ADDR.PWD_MEM), 'o'.charCodeAt(0));
-  // The program read goes out as the PAGED 4-byte address 00 ff 32 92:
-  const progRead = d.writes.find((w) => w[0] === 0x02 && w[2] === 0xff && w[3] === 0x32 && w[4] === 0x92);
+  // The program read goes out as the BARE 4-byte address 00 00 32 92:
+  const progRead = d.writes.find((w) => w[0] === 0x02 && w[3] === 0x32 && w[4] === 0x92);
   assert.ok(progRead);
-  assert.deepEqual([...progRead.slice(1, 5)], [0x00, 0xff, 0x32, 0x92]);
-  // The password read is bare:
+  assert.deepEqual([...progRead.slice(1, 5)], [0x00, 0x00, 0x32, 0x92]);
+  // The password read is bare too:
   const pwdRead = d.writes.find((w) => w[0] === 0x02 && w[3] === 0x05 && w[4] === 0x66);
   assert.ok(pwdRead);
   assert.deepEqual([...pwdRead.slice(1, 5)], [0x00, 0x00, 0x05, 0x66]);
