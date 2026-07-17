@@ -39,7 +39,8 @@ function parseConfig(line: string): FakeDeviceConfig {
     const key = m[1];
     const val = m[2];
     if (key === 'identNo' || key === 'mode') cfg[key] = parseInt(val, 16);
-    else if (key === 'passwordExists' || key === 'leaksCleartext' || key === 'blockReadsWork') cfg[key] = val === '1' || val === 'true';
+    else if (key === 'passwordExists' || key === 'leaksCleartext' || key === 'clearWriteUnlocks' || key === 'blockReadsWork')
+      cfg[key] = val === '1' || val === 'true';
   }
   return cfg;
 }

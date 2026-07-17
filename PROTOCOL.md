@@ -211,7 +211,9 @@ protection registers (all ≥ `0x1F00`) are:
 plaintext[i] = stored[i]  XOR  "protect customer"[i]  XOR  0xFF
 ```
 
-Trivially reversible (the key is baked into the app). This tool reads the raw bytes and shows **both** the cleartext and the XOR-decoded interpretation so the operator recognises their password regardless of firmware.
+Trivially reversible (the key is baked into the app). This tool decodes the store the way the
+detected model stores it — XOR-decoded for the 0BA6.ES10 (`0x45`), cleartext for 0BA5/earlier 0BA6
+(`0x42`–`0x44`) — and shows the other interpretation only as a labelled fallback.
 
 Source: **LOGO!Soft Comfort V8.0 bytecode** — `EncryptAndDecrypt$SymmetricalSimpleEncoding` (key `code[] = "protect customer"`), invoked by `Logo6Update2.uploadPassword`.
 
@@ -219,33 +221,64 @@ Source: **LOGO!Soft Comfort V8.0 bytecode** (`Modular0.getAdress` → `ADR_CLEAR
 
 ---
 
-## 4. Address map (0BA6)
+## 4. Address map
 
-**The 0BA6 address expansion is CONDITIONAL — verified from LSC `Logo6.getAdress`:** it takes the base 16-bit address and ORs the `0xFF0000` page onto it **only if the address is ≥ `0x1F00`**. Everything below `0x1F00` stays a **bare** 16-bit value, transmitted as a 4-byte address `0x0000____`.
+### 4.0 The paging rule (all families)
+
+**The 4-byte address expansion is CONDITIONAL — verified from LSC `Logo6.getAdress`:** it takes the
+base 16-bit address and ORs the `0xFF0000` page onto it **only if the address is ≥ `0x1F00`**.
+Everything below `0x1F00` stays a **bare** 16-bit value, transmitted as `0x0000____`.
 
 ```java
-addr = super.getAdress(id);         // base 16-bit
-if (addr >= 0x1F00) addr |= 0xFF0000;   // page only the high addresses
+addr = super.getAdress(id);          // base 16-bit
+if (addr >= 0x1F00) addr |= 0xFF0000;    // page only the high addresses
 ```
 
-So the program/password-store regions are **bare**, and only the system registers get the `0x00FF` page:
+(On a 0BA5 the wire address is just the low 16 bits — a 2-byte telegram — but the same low/high
+split applies to which logical addresses hold what.)
 
-| Region | base | 0BA6 4-byte addr | Bytes | Meaning |
+### 4.1 Shared registers (same across 0BA4/0BA5/0BA6, via getAdress)
+
+| Region | base | 4-byte wire | Bytes | Meaning |
 |---|---|---|---|---|
-| Password store | `0566` | **`0x00000566`** | 10 | cleartext password |
-| Program name | `0570` | **`0x00000570`** | 16 | ASCII name |
-| Pointer table | `0C14` | **`0x00000C14`** | 260 | 130 × 16-bit block pointers |
-| Output/marker wiring | `0E20` | **`0x00000E20`** | ~200 | Q/M/AQ/X wiring |
-| Program memory | `0EE8` | **`0x00000EE8`** | 2000 | the blocks |
-| Password exists | `48FF` | `0x00FF48FF` | 1 | `0x40` = yes (≥0x1F00 → paged) |
-| Magic / ident / fw | `1F00`–`1F08` | `0x00FF1F00`+ | — | ≥0x1F00 → paged |
-| Clear / set protection | `4800`/`4801` | `0x00FF4800/4801` | 1 | ≥0x1F00 → paged |
+| Password store | `0566` | **`0x00000566`** (bare) | 10 | (obfuscated) password |
+| Program name | `0570` | **`0x00000570`** (bare) | 16 | ASCII name |
+| Password exists | `48FF` | `0x00FF48FF` (paged) | 1 | `0x40` = yes |
+| Magic / ident / fw | `1F00`–`1F08` | `0x00FF1F00`+ (paged) | — | system registers |
+| Clear / set protection | `4800`/`4801` | `0x00FF4800/4801` (paged) | 1 | write 0 to clear / set |
 
-> 🔴 **Correction (this is the big one).** Earlier versions of this tool put the `0x00FF` page on
-> **every** address, so it read the program/password at `0x00FF0566` / `0x00FF0EE8` — the WRONG
-> addresses. Those are below `0x1F00`, so LSC addresses them **bare** (`0x00000566` / `0x00000EE8`).
-> This is exactly why every program/password read returned zeros while the ≥`0x1F00` system
-> registers (`48FF`, `1F00`, `4800`) worked. The tool now uses the bare addresses.
+### 4.2 Program map — this DIFFERS by family
+
+The program/pointer/wiring addresses are **not** shared. Each family's `getMemories` defines its own
+layout. This tool selects the map from the detected IdentNo (see `src/pg/device.ts`).
+
+**0BA4 / 0BA5 (LSC `Logo4.getMemories`, inherited by `Logo5`) — low, bare:**
+
+| Region | base | wire | Bytes |
+|---|---|---|---|
+| Pointer/offset table | `0C14` | `0x00000C14` | 260 |
+| Output/marker wiring | `0E20` | `0x00000E20` | ~200 |
+| Program memory | `0EE8` | `0x00000EE8` | 2000 |
+
+**0BA6 / ES3 / ES10 (LSC `Logo6.getMemories`; ES10 = `Logo6Update2`, which inherits it) — high, paged:**
+
+| Region | base | wire | Bytes |
+|---|---|---|---|
+| Program-offset table | `2FAA` | `0x00FF2FAA` | — |
+| Anchors (Q/M/AM wiring) | `31CA` | `0x00FF31CA` | — |
+| **Program memory** | `3292` | **`0x00FF3292`** | — |
+| Whole upload image | `2FAA…` | `0x00FF2FAA` + **13464** | `getNumberOfUploadTransferBytes` |
+
+The tool reads the 0BA6 program as one contiguous **13464-byte** image from `0x00FF2FAA`. It is saved
+raw; there is **no 0BA6 netlist decoder yet** (the `Logo6` offset-table/block format is not reversed).
+Only the legacy 2460-byte 0BA4/0BA5 layout is decoded to a netlist.
+
+> 🔴 **Two corrections got us here.** (1) Earlier the tool paged **every** address, reading the
+> password/program at `0x00FF0566` / `0x00FF0EE8` — wrong, since they are below `0x1F00`. (2) Even
+> after fixing that, `0C14`/`0E20`/`0EE8` turned out to be the **0BA4** map (LSC `Logo4`); on the
+> 0BA6.ES10 those read `0xFF` (empty). The real 0BA6 program is high and paged at `0x00FF3292`.
+> Confirmed on hardware: with the corrected clear register the password store leaked and decoded to a
+> real password (see LAB-NOTEBOOK).
 
 Source: LOGO!Soft Comfort V8.0 bytecode — `DE.siemens.ad.logo.model.hardware.Logo6.getAdress` (the `addr >= 0x1F00 ? addr | 0xFF0000 : addr` rule).
 

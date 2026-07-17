@@ -1,15 +1,16 @@
 # LOGO! Web Dumper
 
-Read and decode the circuit program from a **Siemens LOGO! 0BA5 / 0BA6** small PLC — entirely in your browser, no install, no Siemens software. (The device is auto-detected on connect; the 0BA5 path is implemented but so far only verified against the emulator, not real 0BA5 hardware.)
+Read the circuit program from a **Siemens LOGO! 0BA5 / 0BA6** small PLC — entirely in your browser, no install, no Siemens software. The tool identifies the model *after* you connect the cable (a transport connection, then a PLC handshake). It reads the raw program image over the PG serial protocol; a **netlist decoder** exists for the legacy 0BA5-style layout, while on the **0BA6 the program image is captured raw** (~13 KB) — its block format is not decoded yet. The 0BA5 path is implemented but so far only exercised against the fake, not real 0BA5 hardware.
 
 **Live tool: https://yonran.github.io/logo-web-dumper/**
 
 ## Compatibility
 
-**Devices** — the serial-PG generations, auto-detected on connect:
+**Devices** — the serial-PG generations, identified after you connect:
 
-- ✅ **LOGO! 0BA6** — `0BA6`, `0BA6.ES3`, `0BA6.ES10` (part `6ED1052-…-0BA6`). Primary target, tested on real hardware.
-- ⚠️ **LOGO! 0BA5** — implemented (2-byte addressing), but **not yet verified on real 0BA5 hardware**.
+- ✅ **LOGO! 0BA6** — `0BA6`, `0BA6.ES3`, `0BA6.ES10` (part `6ED1052-…-0BA6`). Primary target, tested on real hardware; unlock + raw program capture work. Netlist decoding of the 0BA6 image is **not implemented yet**.
+- ⚠️ **LOGO! 0BA5** — implemented (2-byte addressing, legacy program map + netlist decoder), but **not yet verified on real 0BA5 hardware**.
+- ❔ **Unrecognised IdentNos** — connect for diagnostics only; the program read is disabled (no verified memory map).
 - ❌ **LOGO! 0BA7 / 0BA8 (LOGO!8)** — **not supported**: these use Ethernet, a completely different protocol.
 - ❌ **0BA4 and earlier** — not supported.
 
@@ -29,15 +30,15 @@ Siemens' LOGO!Soft Comfort *Demo* can't transfer programs (the Transfer menu is 
 
 ## What it does
 
-1. **Connect** to the cable (Web Serial or WebUSB).
-2. **Identify** the device (`0x21` handshake → confirms 0BA6, IdentNo `0x43`/`0x44`/`0x45`).
-3. **Self-test** by reading the program name — confirms the address mapping before you trust a dump.
-4. **Dump** the raw program memory to a `.bin`.
-5. **Decode** the pointer table + I/O wiring + program into a readable **netlist** (e.g. `B001 = OR(B002, I2)`, `Q1 = B001`).
+1. **Connect** to the cable (Web Serial or WebUSB) — a transport connection.
+2. **Identify** the PLC (`0x21` handshake → IdentNo `0x43`/`0x44`/`0x45` = 0BA6, or the `0x1F02` probe → 0BA5). The tool picks the memory map from this.
+3. **Recover the password & unlock** if the program is protected (reads the stored password, clears protection via `0x4800`).
+4. **Read the program** — the device's program image to a `.bin`. On 0BA5 it decodes to a readable **netlist** (e.g. `B001 = OR(B002, I2)`, `Q1 = B001`); on 0BA6 it saves the raw image (decoder pending).
+5. **Re-lock** to restore protection when done.
 
 ## Status / accuracy
 
-- Basic gates (AND/OR/NOT/NAND/NOR/XOR + edge variants) and output/marker wiring are decoded **exactly** (validated against the reverse-engineered spec).
+- The **netlist decoder targets the legacy 0BA5-style 2460-byte layout**; the 0BA6 program image is captured raw and not decoded yet. Basic gates (AND/OR/NOT/NAND/NOR/XOR + edge variants) and output/marker wiring decode **exactly** against the reverse-engineered spec, but this has **not** been validated against a real hardware capture.
 - Special functions (timers, counters, message text) are **named** with their raw bytes shown; numeric parameters aren't interpreted yet.
 - The USB-serial chip drivers for the WebUSB (Android) path (CP210x / CH340 / FTDI) are best-effort and untested on all silicon; the desktop Web Serial path is robust.
 - **Requires STOP mode** on the device for memory reads.
