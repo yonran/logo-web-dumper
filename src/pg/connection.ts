@@ -286,6 +286,7 @@ export class Connection {
    * the data on success, or null (with a logged reason) on any rejection/short read.
    */
   async readBlock(addr: number, count: number, label = 'Read Block'): Promise<Uint8Array | null> {
+    if (!Number.isInteger(count) || count <= 0 || count > 0xffff) throw new RangeError('Read Block count must be 1..65535');
     const cmd = new Uint8Array([OP.READ_BLOCK, ...encodeAddr(this.device, addr), (count >> 8) & 0xff, count & 0xff]);
     await this.xport.read(4096, 60);
     await this.xport.write(cmd);
@@ -323,7 +324,7 @@ export class Connection {
     const ok = cs.length > 0 && cs[0] === x;
     this.logger.log('  ' + label + ' → OK, ' + data.length + ' bytes, XOR ' + (ok ? 'valid' : 'MISMATCH (got ' + hex(cs) + ', want 0x' + x.toString(16) + ')'), ok ? 'ok' : 'err');
     await this.xport.read(4096, 60);
-    return data;
+    return ok ? data : null;
   }
 
   /** Operating mode: `55 17 17 AA` → `06 <mode>`. Returns the mode byte; logs the meaning. */

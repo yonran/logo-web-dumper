@@ -123,7 +123,7 @@ test('unlock with the corrected 0x4800 write still does not take on the ES10 mod
 });
 
 test('regression: after a failed unlock, decode BLOCKS instead of reading a protected device', async () => {
-  // Reproduces the observed hardware session: unlock did not take, then "Read program & decode"
+  // Reproduces the observed hardware session: unlock did not take, then the program-read action
   // must not spend a minute reading zeros and save a junk file. The guard depends on `unlocked`
   // reflecting real read access, not merely that a write was attempted.
   const h = makeHarness(ES10);
@@ -149,13 +149,32 @@ test('0BA6 read pulls the program image from the Logo6 map (0x00FF2FAA), not the
   assert.equal(h.store.get().dumped, true);
 });
 
-test('unlock reports OPEN via Read Block when Read Block returns program data', async () => {
-  // The path LSC uses (Memory.upload → Read Block 0x05). When the device accepts Read Block and the
-  // clear write opens the program, the unlock probe must recognise it and report it via Read Block.
-  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, program: new Uint8Array(16).fill(0x33) });
+test('unlock keeps the verified byte-read session instead of risking a rejected block probe', async () => {
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: false, program: new Uint8Array(16).fill(0x33) });
   await recoverPasswordAndUnlock(h.app);
-  assert.ok(logged(h.logger, 'OPEN via Read Block'));
+  assert.ok(logged(h.logger, 'OPEN via Read Byte'));
+  assert.equal(h.device.writes.some((w) => w[0] === 0x05), false);
   assert.equal(h.store.get().unlocked, true);
+});
+
+test('full read preserves the session that was successfully unlocked', async () => {
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, program: new Uint8Array(512).fill(0x44) });
+  await recoverPasswordAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, true);
+  const reconnectsBefore = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
+  await readAllAndDecode(h.app);
+  const reconnectsAfter = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
+  assert.equal(reconnectsAfter, reconnectsBefore, 'must not restart/reconnect after a verified unlock');
+  assert.equal(h.ui.downloads.length, 1);
+  assert.equal(h.ui.downloads[0].bytes.length, 13464);
+});
+
+test('uniform program images are saved as diagnostic evidence', async () => {
+  const h = makeHarness({ identNo: 0x42, passwordExists: false, program: new Uint8Array(0) });
+  await readAllAndDecode(h.app);
+  assert.equal(h.ui.downloads.length, 1);
+  assert.equal(h.ui.downloads[0].bytes.length, 2460);
+  assert.ok(logged(h.logger, 'ENTIRELY 0x00'));
 });
 
 test('unlock: ES10 rejects Read Block AND Read Byte stays zero → not opened', async () => {

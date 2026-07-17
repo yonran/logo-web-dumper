@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  LOGO! Web Dumper — read & decode a Siemens LOGO! 0BA6 program in the browser.
+  LOGO! Web Dumper — capture Siemens LOGO! 0BA5/0BA6 programs in the browser.
   https://github.com/yonran/logo-web-dumper   (public domain / Unlicense)
 
   Protocol & program-format decoding reimplemented from the community
@@ -48,19 +48,20 @@
 <h1>LOGO! 0BA5 / 0BA6 Program Dumper</h1>
 <p class="sub">Reads the circuit-program memory off a Siemens LOGO! <b>0BA5 or 0BA6</b> over the serial PG protocol, in your browser (Chrome/Edge, desktop or Android). Two transports: <b>Web Serial</b> (the OS driver configures the cable — most reliable) and <b>WebUSB</b> (this tool configures the chip directly — needed where Web Serial doesn't list the cable). Nothing is uploaded — it all runs locally.</p>
 <p class="sub" style="font-size:12.5px">
-  <b>Works with:</b> LOGO! <b>0BA6</b> (0BA6 / 0BA6.ES3 / 0BA6.ES10, part <code>6ED1052-…-0BA6</code>) and <b>0BA5</b> — the generations with the 4-wire RS-232 <b>PG serial</b> interface (9600 8E1). The device is auto-detected on connect. 0BA5 is implemented but not yet verified on real 0BA5 hardware.<br>
+  <b>Works with:</b> LOGO! <b>0BA6</b> (0BA6 / 0BA6.ES3 / 0BA6.ES10, part <code>6ED1052-…-0BA6</code>) and <b>0BA5</b> — the generations with the 4-wire RS-232 <b>PG serial</b> interface (9600 8E1). The PLC is identified after the cable connects. 0BA5 is implemented but not yet verified on real hardware; its legacy image can be decoded, while 0BA6 is currently saved raw.<br>
   <b>Does NOT work with:</b> LOGO! <b>0BA7 / 0BA8 (LOGO!8)</b> — those use Ethernet, a completely different protocol; and 0BA4 / earlier.<br>
   <b>Cable / serial:</b> the USB LOGO! programming cable (or any USB-serial adapter — FTDI, CP210x, CH340/CH341, Prolific). <b>Web Serial</b> (desktop Chrome/Edge) works with any chip the OS has a driver for; <b>WebUSB</b> drives the chip itself — <b>CH340/CH341 is verified</b>, CP210x and FTDI are best-effort/unverified. <b>Browsers:</b> Chrome/Edge on desktop, or Chrome on Android via a USB-OTG adapter. Safari, Firefox, and iOS are <b>not</b> supported (no Web Serial / WebUSB).
 </p>
 
 <div class="card warn">
-  <b>Before you start</b> &mdash; plug the USB cable in, and put the LOGO! in <b>STOP</b> (ESC &rarr; Stop on the device; step 2 also does it). On Android use an OTG adapter and <b>Chrome</b>. Follow the numbered steps &mdash; the glowing button is the recommended next one. The log at the bottom records every byte; use <b>Copy log</b> to send it to me.
+  <b>Before you start</b> &mdash; plug the USB cable in, and put the LOGO! in <b>STOP</b> (ESC &rarr; Stop on the device; step 2 also does it). On Android use an OTG adapter and <b>Chrome</b>. Follow the numbered steps &mdash; the glowing button is the recommended next one. The log records commands, replies, and long-read progress; use <b>Copy log</b> to share it.
 </div>
 
 <div class="card">
   <p class="mut" style="font-size:12.5px;margin:0 0 8px">Do these in order. Steps <b>3</b> and <b>5</b> write to the PLC and require a second click to confirm.</p>
   <div class="row">
     <button id="connect">1 &middot; Connect cable</button>
+    <button id="disconnect" class="sec" disabled>Disconnect</button>
     <label style="display:inline-flex;align-items:center;gap:4px">Transport
       <select id="transport" style="font:inherit;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)">
         <option value="auto">Auto</option>
@@ -76,7 +77,7 @@
     <span id="status" class="mut">not connected</span>
   </div>
   <p class="mut" style="font-size:12.5px;margin:8px 0 0">
-    Step 3 is only needed if the program is password-protected (the tool detects it): it recovers the password the 0BA6 stores in cleartext and lowers protection so step 4 can read; step 5 restores protection. No password &rarr; skip to step 4.
+    Step 3 is only needed if the program is password-protected: it displays a readable stored password (cleartext on older models, XOR-decoded on ES10) and can lower protection so step 4 can read. If the store is hidden, the optional write is explicitly labelled an experimental bypass. Step 5 restores protection. No password &rarr; skip to step 4.
   </p>
 </div>
 
@@ -100,12 +101,12 @@
       <button id="nametest" class="sec" disabled>Read program name</button>
     </div>
     <div class="row">
-      <label>Start addr (hex) <input id="addr" value="00FF3292"></label>
-      <label>Length (bytes) <input id="len" value="2000"></label>
+      <label>Start addr (hex) <input id="addr" value="00FF2FAA"></label>
+      <label>Length (bytes) <input id="len" value="13464"></label>
       <button id="dump" class="sec" disabled>Dump raw region &rarr; .bin</button>
     </div>
     <p class="mut" style="font-size:12.5px;margin:6px 0 0">
-      Debugging aids. On a 0BA6.ES10 the program lives at <code>0x00FF3292</code> (the LSC <code>Logo6</code> map; addresses &ge; <code>0x1F00</code> take the <code>0x00FF____</code> page, low ones like the password <code>0x00000566</code> stay bare); the 0BA4/0BA5 program is at the bare <code>0x00000EE8</code>. Reads use single-byte Read Byte because Read Block is rejected on this hardware. Read Byte returns <code>0x00</code> for protected/unmapped memory (it does not fault), so an all-zero region means "protected or empty," not "read failed."
+      Debugging aids. The detected model supplies these defaults: the complete 0BA6 upload image is <code>13464</code> bytes from <code>0x00FF2FAA</code> (program body <code>0x00FF3292</code>); the complete legacy 0BA5 image is assembled from <code>0x0C14</code>, <code>0x0E20</code>, and <code>0x0EE8</code>. The password store remains bare at <code>0x00000566</code>. Long captures use dependable single-byte reads; unlock diagnosis may try Read Block as a fallback. Uniform <code>0x00</code> or <code>0xFF</code> captures are saved because they can prove protection, emptiness, or a wrong map.
     </p>
   </div>
 </details>

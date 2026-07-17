@@ -10,7 +10,7 @@ import { $, copyText, downloadText } from '../util/dom.js';
 import { dumpRegion, nameTest, readFirmware } from '../actions/diagnostics.js';
 import { recoverPasswordAndUnlock, relock } from '../actions/password.js';
 import { decodeFile, readAllAndDecode } from '../actions/program.js';
-import { doCheckMode, doConnect, doIdentify, doRestart, doStop } from '../actions/session.js';
+import { doCheckMode, doConnect, doDisconnect, doIdentify, doRestart, doStop } from '../actions/session.js';
 
 // Buttons that never touch the serial port and so stay usable during an operation.
 const ALWAYS_ON = ['abort', 'copylog', 'dllog', 'clearlog'];
@@ -48,6 +48,14 @@ export function wireUi(app: App): void {
     abortBtn.disabled = !busy;
     if (!busy) abortBtn.textContent = 'Abort';
     document.querySelectorAll('button').forEach((b) => b.classList.toggle('next', b.id === next && !b.disabled));
+    if (app.conn?.known) {
+      const mem = app.conn.mem;
+      const first = mem.regions[0];
+      $<HTMLButtonElement>('#decode').textContent =
+        mem.decode === 'legacy2460' ? '4 · Read program & decode' : '4 · Read program & save raw';
+      $<HTMLInputElement>('#addr').value = first.base.toString(16).padStart(8, '0').toUpperCase();
+      $<HTMLInputElement>('#len').value = String(first.len);
+    }
   }
   app.store.subscribe(render);
 
@@ -77,7 +85,7 @@ export function wireUi(app: App): void {
         app.log(e instanceof Error ? e.message : String(e), 'err');
       } finally {
         busy = false;
-        render(app.store.get());
+        app.store.touch();
       }
     };
   }
@@ -132,9 +140,6 @@ export function wireUi(app: App): void {
       const pref = $<HTMLSelectElement>('#transport').value as TransportMode;
       try {
         await doConnect(app, pref);
-        // Point the raw-dump default at the detected device's program base (0x00FF3292 on 0BA6,
-        // 0x00000EE8 on 0BA5) instead of a permanently hard-coded value.
-        if (app.conn) $<HTMLInputElement>('#addr').value = app.conn.mem.programBase.toString(16).padStart(8, '0').toUpperCase();
       } finally {
         render(app.store.get());
       }
@@ -143,6 +148,7 @@ export function wireUi(app: App): void {
 
   // ---- session / diagnostics ---- (label = what the Stop button says it's stopping)
   on('ident', doIdentify, 'identify');
+  on('disconnect', doDisconnect, 'disconnect');
   on('restart', doRestart, 'restart');
   on('mode', doCheckMode, 'mode check');
   on('stop', doStop, 'STOP command');

@@ -3,7 +3,7 @@
 import type { App } from '../app.js';
 import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { decodeCombined } from '../decode/program.js';
-import { deviceSlug, ensureStopped } from './common.js';
+import { confirmStoppedInCurrentSession, deviceSlug, ensureStopped } from './common.js';
 
 /**
  * Read the pointer table, wiring, and program via Read Byte, save the combined dump, and
@@ -11,7 +11,9 @@ import { deviceSlug, ensureStopped } from './common.js';
  * yet unlocked, since that would only yield zeros.
  */
 export async function readAllAndDecode(app: App): Promise<void> {
-  const conn = await ensureStopped(app);
+  // LSC reads the program in the same session in which it clears protection. Do not throw away a
+  // verified unlock with Restart → Connect; locked/ordinary reads still use the recovery preamble.
+  const conn = app.store.get().unlocked ? await confirmStoppedInCurrentSession(app) : await ensureStopped(app);
   if (!conn) return;
   if (!conn.known) {
     app.log('Program read is disabled for ' + conn.deviceName + ' — this tool has no verified memory map for it, so the region addresses would be a guess. Use “Dump raw region” with an explicit address if you know where to read.', 'err');
@@ -34,7 +36,7 @@ export async function readAllAndDecode(app: App): Promise<void> {
   for (const r of mem.regions) parts.push(await conn.readRegion(r.base, r.len, r.name));
   const full = new Uint8Array(total);
   for (let i = 0, o = 0; i < parts.length; o += parts[i].length, i++) full.set(parts[i], o);
-  // Post-read guards: never save a bogus file that only looks like a success.
+  // Classify suspicious captures, but save them: uniform data is useful diagnostic evidence.
   let nz = 0;
   let nff = 0;
   for (const d of full) {
@@ -42,9 +44,8 @@ export async function readAllAndDecode(app: App): Promise<void> {
     if (d === 0xff) nff++;
   }
   if (nz === 0) {
-    app.log('Image is ENTIRELY 0x00 — protected or empty. Nothing saved. (If protected, run step 3; else check a program is actually loaded.)', 'err');
-    app.ui.setNetlist('(image is all zero — nothing to decode)');
-    return;
+    app.log('Image is ENTIRELY 0x00 — protected, empty, or unmapped. Saving the diagnostic capture anyway.', 'err');
+    app.ui.setNetlist('(image is all zero — saved for diagnosis, nothing to decode)');
   }
   if (nff === full.length) {
     app.log('Image is ENTIRELY 0xFF — this reads like erased/empty flash or the wrong address map for ' + conn.deviceName + '. Saving anyway so you can inspect it.', 'err');
@@ -53,8 +54,13 @@ export async function readAllAndDecode(app: App): Promise<void> {
   app.ui.download(fname, full);
   app.store.set({ dumped: true });
   if (mem.decode === 'legacy2460' && full.length === 2460) {
-    app.ui.setNetlist(decodeCombined(full));
-    app.log('Decoded. Combined dump saved as ' + fname + ' (' + nz + ' non-zero bytes; re-decodable with the file button).', 'ok');
+    if (nz > 0 && nff !== full.length) {
+      app.ui.setNetlist(decodeCombined(full));
+      app.log('Decoded. Combined dump saved as ' + fname + ' (' + nz + ' non-zero bytes; re-decodable with the file button).', 'ok');
+    } else {
+      app.ui.setNetlist('(uniform legacy image saved for diagnosis; decoding would not be meaningful)');
+      app.log('Saved uniform legacy capture as ' + fname + '; skipped netlist decoding because it contains no credible program data.', 'err');
+    }
   } else {
     app.ui.setNetlist(
       'Raw program image captured (' + full.length + ' bytes, ' + nz + ' non-zero) and saved as ' + fname + '.\n' +

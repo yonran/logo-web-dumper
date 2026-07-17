@@ -95,7 +95,11 @@ The LOGO! sends `0x06` immediately on receiving the `0x05` byte, then streams th
 
 Source: brickpool/logo PG-Protocol wiki (Read Block Command 05, incl. the note on the immediate ACK); `ReadBlock()` in `src/LogoPG.cpp` (4-byte address path, XOR loop).
 
-> Note: `ReadBlock` is invoked exactly **once** in the reference library — `ReadBlock(ADDR_PWD_R_MEM, 10, …)`, i.e. 10 bytes at the password store (bare `0x00000566` on the wire, see the paging rule below). Every other documented access uses single-byte `ReadByte`. Block reads of the program area are not exercised by any known working implementation.
+> The reference code uses Read Block for bulk transfer, including password upload and program-image
+> upload. The only captured hardware rejection so far targeted the now-known-wrong legacy program
+> address, so it does not establish that Read Block is unsupported at the correct 0BA6 map. The tool
+> keeps byte-wise reads as its dependable capture path and uses a small block read only as an unlock
+> fallback when byte probes remain uniform.
 
 ### 3.2a Exception response — and the Restart trap (`0x22`)
 
@@ -160,7 +164,7 @@ Memory reads (and firmware/clock reads) require STOP. Rather than assuming, quer
 
 Source: brickpool/logo `src/LogoPG.cpp` — `LOGO_STOP` / `LOGO_START` / `LOGO_MODE`, `GetPlcStatus()`, `RecvControlResponse()`; PG-Protocol wiki "Memory Access".
 
-### 3.4 Password protection and cleartext recovery
+### 3.4 Password protection and password-store recovery
 
 If the circuit program is password-protected, the program area cannot be read: on a 0BA6.ES10 `Read Block` returns `15 03` (illegal access) and `Read Byte` returns `0x00` for every protected byte (it does **not** fault). Check first:
 
@@ -170,25 +174,28 @@ Read Byte 0x00FF1F00  →  0x04   (magic, sanity)
 Read Byte 0x00FF1F01  →  0x00   (magic, sanity)
 ```
 
-**The 0BA6 stores the password in cleartext and it is recoverable from the device.** The sequence is what LOGO!Soft Comfort itself does — **verified by decompiling LSC V8.0** (`DE.siemens.ad.logo.model.hardware.Modular0`, methods `isPWProtected` / `uploadPassword` / `checkPassword` / `clearPasswordOnLogo`, with `getAdress` mapping the symbolic addresses):
+**When firmware exposes the password store, the password is recoverable locally.** Older models
+store cleartext; ES10 stores a reversible XOR representation. Some firmware may return all zeros,
+in which case no password is recovered. The sequence is what LOGO!Soft Comfort itself does —
+**verified by decompiling LSC V8.0** (`DE.siemens.ad.logo.model.hardware.Modular0`, methods
+`isPWProtected` / `uploadPassword` / `checkPassword` / `clearPasswordOnLogo`):
 
 ```
 Read  0x00FF48FF                 ← password flag (isPWProtected)
-Read  0x00000566 .. 0x0000056F   ← 10-byte cleartext password (uploadPassword, stop at first 0)
+Read  0x00000566 .. 0x0000056F   ← 10-byte stored representation (stop at first 0)
                                    (Read Byte on 0BA6.ES10; Read Block is rejected)
 [compare entered vs stored IN THE PC — no password is ever sent to the device]
 Write Byte 0x00FF4800 = 0x00     ← clear protection (clearPasswordOnLogo). THE UNLOCK WRITE.
 ```
 
 Verified LSC addresses. `getAdress` returns the 16-bit value; the 0BA6 32-bit wire form ORs
-`0xFF0000` **only for addresses ≥ `0x1F00`** (system registers). Anything below stays a bare
-`0x0000____` — so the password store and program are *not* paged, but the flag and the
-protection registers (all ≥ `0x1F00`) are:
+`0xFF0000` **only for addresses ≥ `0x1F00`**. Anything below stays a bare `0x0000____`.
+This explains the password store; program addresses are family-specific and listed in section 4.2.
 
 | Symbolic (LSC) | 16-bit | 0BA6 wire | Role |
 |---|---|---|---|
 | `ADR_PASSWORD_FLAG` | `0x48FF` | `0x00FF48FF` | read: password present? |
-| `ADR_PASSWORD` | (`0x0566`) | `0x00000566` | read: 10-byte cleartext |
+| `ADR_PASSWORD` | (`0x0566`) | `0x00000566` | read: 10-byte stored representation |
 | `ADR_CLEAR_PASSWORD_ACTIVE` | `0x4800` | `0x00FF4800` | write 0 → **clear protection (unlock)** |
 | `ADR_SET_PASSWORD_ACTIVE` | `0x4801` | `0x00FF4801` | write 0 → **set protection (re-lock)** |
 
@@ -203,7 +210,7 @@ protection registers (all ≥ `0x1F00`) are:
 - It changes a protection register, not program memory. **Non-destructive**: the program and the stored password are untouched (LSC reads the password *before* this write, and the program *after*). The only command that erases the program/password is Clear Program `0x20`, which is never sent.
 - It is **reversible**: writing `0x00` to `0x00FF4801` re-sets protection (`clearPasswordOnLogo`'s paired setter). `0x48FF` only reports whether a password exists, not the level.
 
-> This is password *recovery from your own hardware*, exploiting the 0BA6's cleartext storage — legitimate for a device you own, not a way around someone else's protection.
+> This is password recovery from hardware you own, using a readable or reversibly obfuscated store.
 
 **Password obfuscation on newer 0BA6 firmware.** Older firmware stores the 10 password bytes at `0x0566` as plain ASCII. Newer 0BA6 (e.g. the **ES10 / `Logo6Update2`**, gated by `supports("supportPasswordSimpleEncrypt")`) stores them **obfuscated** — LSC's `EncryptAndDecrypt$SymmetricalSimpleEncoding`. This is **not** a cipher (contrast the LOGO!8 Ethernet path, which uses real 3DES under a null key): it's a symmetric per-byte XOR against a hardcoded 16-byte ASCII key, plus a bit-flip, applied over the nonzero bytes:
 
@@ -286,7 +293,7 @@ Source: 0BA5 addresses from brickpool/logo 0BA5-Dekodierung wiki (Appendix A / A
 
 ---
 
-## 5. Program format
+## 5. Legacy 0BA4/0BA5 program format
 
 ### 5.1 Pointer table (`0x0C14`, 260 bytes)
 
@@ -376,6 +383,9 @@ Source: brickpool/logo 0BA5-Dekodierung wiki (Sonderfunktionen – SF; Einschalt
 ---
 
 ## 6. What this tool decodes
+
+This section applies only to the legacy 2460-byte 0BA4/0BA5 image described above. The 0BA6 image
+is captured raw and is not passed to this decoder.
 
 | Item | Accuracy |
 |---|---|

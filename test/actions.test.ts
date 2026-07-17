@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
-import { doCheckMode, doStop } from '../src/actions/session.js';
+import { doCheckMode, doDisconnect, doStop } from '../src/actions/session.js';
 import { recoverPasswordAndUnlock, relock, simpleDecode } from '../src/actions/password.js';
 import { readFirmware } from '../src/actions/diagnostics.js';
 import { ADDR } from '../src/pg/constants.js';
@@ -13,6 +13,15 @@ test('doCheckMode records the STOP state', async () => {
   const h = makeHarness({ mode: 0x42 });
   await doCheckMode(h.app);
   assert.equal(h.store.get().stopped, true);
+});
+
+test('disconnect closes the session and resets derived state', async () => {
+  const h = makeHarness();
+  h.store.set({ connected: true, stopped: true, protected: true, unlocked: true, dumped: true });
+  await doDisconnect(h.app);
+  assert.equal(h.app.conn, null);
+  assert.deepEqual(h.store.get(), { connected: false, stopped: false, protected: null, unlocked: false, dumped: false });
+  assert.equal(h.ui.status, 'not connected');
 });
 
 test('doStop: forces STOP and records that a password exists, with the reversibility caveat', async () => {

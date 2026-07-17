@@ -30,3 +30,16 @@ export async function ensureStopped(app: App, hint: string = STOP_HINT): Promise
   }
   return conn;
 }
+
+/** Confirm STOP without restarting or reconnecting, preserving a just-unlocked session. */
+export async function confirmStoppedInCurrentSession(app: App, hint: string = STOP_HINT): Promise<Connection | null> {
+  const conn = app.requireConn();
+  conn.abort = false;
+  const m = await conn.getMode();
+  app.store.set({ stopped: isStopMode(m) });
+  if (!isStopMode(m)) {
+    app.log(hint, 'err');
+    return null;
+  }
+  return conn;
+}

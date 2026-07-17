@@ -25,6 +25,16 @@ export async function doConnect(app: App, pref: TransportMode): Promise<void> {
     await app.conn.restart();
     app.store.set({ connected: true });
   } catch (e) {
+    if (app.conn) {
+      try {
+        await app.conn.close();
+      } catch {
+        // Keep the original connection failure; cleanup is best effort.
+      }
+    }
+    app.conn = null;
+    app.store.set({ connected: false, stopped: false, protected: null, unlocked: false, dumped: false });
+    app.ui.setStatus('not connected', 'err');
     const msg = e instanceof Error ? e.message : String(e);
     const name = e instanceof Error ? e.name : '';
     app.log('Connect failed: ' + msg, 'err');
@@ -44,12 +54,24 @@ export async function doConnect(app: App, pref: TransportMode): Promise<void> {
   }
 }
 
-/** Identify (0x21) only. */
-export async function doIdentify(app: App): Promise<void> {
-  await app.requireConn().connect();
+/** Close the transport and return every session-derived UI field to its initial state. */
+export async function doDisconnect(app: App): Promise<void> {
+  const conn = app.requireConn();
+  await conn.close();
+  app.conn = null;
+  app.store.set({ connected: false, stopped: false, protected: null, unlocked: false, dumped: false });
+  app.ui.setStatus('not connected', 'mut');
+  app.log('Disconnected.', 'ok');
 }
 
-/** Restart (0x22) then re-negotiate (0x21). */
+/** Identify using the 0BA6 handshake or the 0BA5 two-byte probe. */
+export async function doIdentify(app: App): Promise<void> {
+  const conn = app.requireConn();
+  await conn.connect();
+  app.ui.setStatus('connected · ' + conn.deviceName, conn.known ? 'ok' : 'err');
+}
+
+/** Restart (0x22) then re-negotiate using the device-appropriate handshake. */
 export async function doRestart(app: App): Promise<void> {
   const conn = app.requireConn();
   await conn.restart();

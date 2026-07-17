@@ -11,6 +11,7 @@ const s = (patch: Partial<AppState>): AppState => ({ ...base, ...patch });
 test('disconnected: only connect + always-on enabled; connect glows', () => {
   const { enabled, next } = buttonEnablement(base);
   assert.equal(enabled.connect, true);
+  assert.equal(enabled.disconnect, false);
   assert.equal(enabled.stop, false);
   assert.equal(enabled.decode, false);
   assert.equal(enabled.unlock, false);
@@ -24,6 +25,7 @@ test('disconnected: only connect + always-on enabled; connect glows', () => {
 test('connected, not stopped: stop enabled + glows; reads still disabled', () => {
   const { enabled, next } = buttonEnablement(s({ connected: true }));
   assert.equal(enabled.stop, true);
+  assert.equal(enabled.disconnect, true);
   assert.equal(enabled.mode, true);
   assert.equal(enabled.ident, true);
   assert.equal(enabled.restart, true);

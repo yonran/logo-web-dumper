@@ -44,7 +44,7 @@ Convention: `→` = PC→LOGO, `←` = LOGO→PC. All addresses 4-byte big-endia
   - **Program `0x3292` → wire `0x00FF3292`**; total image `getNumberOfUploadTransferBytes` = **13464 bytes**
   - Low block-name tables stay bare: BlocknamenTabelle `0x0688`, Blocknamen `0x0708`, Message RTF `0x0AA8`
 - **Tool change:** the program map is now per-device in `DeviceProfile.mem` (0BA4/0BA5 legacy low
-  map vs 0BA6 high paged map). "Read program & decode" reads the whole 13464-byte image contiguously
+  map vs 0BA6 high paged map). “Read program & save raw” reads the whole 13464-byte image contiguously
   from `0x00FF2FAA` and saves it raw (no 0BA6 netlist decoder yet). Next: capture that image on
   hardware and reverse the 0BA6 offset-table/block format.
 
@@ -193,7 +193,10 @@ that, the address stays **bare** (`0x0000____`).
 This fits every observation exactly: every address the tool read successfully is ≥ `0x1F00`
 (`48FF`, `1F00`, `1F02`, `4800` → paged `0x00FF____`), and every address that returned zero is
 < `0x1F00` (`0566`, `0EE8`, `0570`, `0C14`, `0E20`). **We had been reading the program/password at
-`0x00FF0566` / `0x00FF0EE8`; the correct 0BA6 addresses are the bare `0x00000566` / `0x00000EE8`.**
+`0x00FF0566` / `0x00FF0EE8`. The password correction remains valid (`0x00000566`), but the
+program conclusion here was later superseded: `0x00000EE8` is the legacy 0BA4/0BA5 map; the 0BA6
+program body is `0x00FF3292` and its full upload image starts at `0x00FF2FAA` (see the current
+conclusion at the top of this notebook).**
 So a read of `0x00` was "wrong/unmapped address", not "protected" — and the `0x4800` clear may
 have been working the whole time while we read the wrong place.
 

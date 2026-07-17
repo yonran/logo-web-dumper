@@ -6,6 +6,7 @@ import type { AppState } from '../state/store.js';
 
 export const BUTTON_IDS = [
   'connect',
+  'disconnect',
   'stop',
   'mode',
   'ident',
@@ -35,6 +36,7 @@ export function buttonEnablement(s: AppState): Enablement {
   const canUnlock = ST && s.protected !== false && !s.unlocked;
   const enabled: Record<ButtonId, boolean> = {
     connect: !C,
+    disconnect: C,
     stop: C,
     mode: C,
     ident: C,
