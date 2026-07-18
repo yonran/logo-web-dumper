@@ -59,17 +59,24 @@ const MAP_LEGACY: ProgramMap = {
 // These are BARE 4-byte addresses (0x0000____), NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in
 // getAdress() (constants.ts), used only for symbolic register reads. Memory reads
 // (Memory.upload → readByteArray(rawBase)) never call getAdress, so 0x3292 stays bare even though
-// it is ≥ 0x1F00. The bases sum contiguously to 13464 = getNumberOfUploadTransferBytes.
+// it is ≥ 0x1F00. Each region's EXACT byte length is count×width from getMemories + maxValues[]:
+//   offset table  Memory16(getMaxResource(0)+10=210, width 2)          → 420
+//   anchors/markers AnchorMemory16(count, width 20)                     → count×20 (2→40, 3→60, 1→20)
+//   program body  ProgramMemory16(getMaxResource(14)=3800, width 1)     → 3800
+// Reading a region at its EXACT length (never overshooting into the gap before the next region, and
+// never past the program's real end) is what avoids the "read across the border" 0x03 that latches
+// and re-locks the session. Read Block is also capped by the ES10 firmware at a small telegram size,
+// so readRegionViaBlock chunks small.
 const MAP_0BA6: ProgramMap = {
   regions: [
-    { base: 0x00002faa, len: 544, name: 'offset table' }, // → 0x31CA
-    { base: 0x000031ca, len: 40, name: 'anchors Q' }, // → 0x31F2
-    { base: 0x000031f2, len: 60, name: 'markers M' }, // → 0x322E
-    { base: 0x0000322e, len: 20, name: 'analog anchors' }, // → 0x3242
-    { base: 0x00003242, len: 40, name: 'virtual anchors' }, // → 0x326A
-    { base: 0x0000326a, len: 20, name: 'reserved' }, // → 0x327E
-    { base: 0x0000327e, len: 20, name: 'special markers' }, // → 0x3292
-    { base: 0x00003292, len: 12720, name: 'program body' }, // → 0x6442 (end of the 13464-byte image)
+    { base: 0x00002faa, len: 420, name: 'offset table' }, // Memory16 210×2
+    { base: 0x000031ca, len: 40, name: 'anchors Q' }, // AnchorMemory16 2×20
+    { base: 0x000031f2, len: 60, name: 'markers M' }, // 3×20
+    { base: 0x0000322e, len: 20, name: 'analog anchors' }, // 1×20
+    { base: 0x00003242, len: 40, name: 'virtual anchors' }, // 2×20
+    { base: 0x0000326a, len: 20, name: 'reserved' }, // 1×20
+    { base: 0x0000327e, len: 20, name: 'special markers' }, // 1×20
+    { base: 0x00003292, len: 3800, name: 'program body' }, // ProgramMemory16 3800×1
   ],
   programBase: 0x00003292,
   readMode: 'block', // the program region only answers Read Block (0x05), not Read Byte — verified on ES10

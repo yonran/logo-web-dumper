@@ -304,42 +304,36 @@ export class Connection {
    * failure we stop and return what we have (zero-filled tail) rather than risk churning recovery.
    * Honours `abort`.
    */
-  async readRegionViaBlock(addr: number, count: number, label: string, maxChunk = 512): Promise<Uint8Array> {
+  async readRegionViaBlock(addr: number, count: number, label: string, maxChunk = 16): Promise<Uint8Array> {
     const out = new Uint8Array(count);
     const t0 = Date.now();
     let off = 0;
     let lastLoggedAt = -1;
-    let chunk = Math.min(maxChunk, count);
     this.onProgress?.({ label, done: 0, total: count, elapsedS: 0 });
     while (off < count) {
       if (this.abort) {
         this.logger.log('  aborted at ' + off + '/' + count, 'err');
         throw new Error('aborted');
       }
-      const n = Math.min(chunk, count - off);
+      const n = Math.min(maxChunk, count - off);
       let data: Uint8Array;
       try {
-        data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
+        // recoverOnReject=false: an illegal-access here means we ran past this region's real content.
+        // The Restart inside recover() RE-LOCKS the just-unlocked program on the ES10, so we must NOT
+        // recover — we simply stop this region with what we captured and leave the session as-is.
+        data = await this.readBlock((addr + off) >>> 0, n, label + ' block', false);
       } catch (e) {
-        // Illegal access (0x03) = "read across the border": this block ran past THIS Memory region's
-        // real end (its content is shorter than the max window). Halve and retry from the same
-        // offset to read right up to the border; when even a 1-byte block is rejected, the region's
-        // content ends here (the rest is the inter-region gap — legitimately empty, not lost data).
-        // Every OTHER failure (transient after retries, XOR, unexpected) propagates: a genuine
-        // mid-read failure must abort, never silently zero-fill.
-        if (e instanceof PgError && e.nok === 0x03 && n > 1) {
-          chunk = n >> 1;
-          continue;
-        }
+        // Illegal access (0x03) = content boundary (or the firmware's max block size). Stop here and
+        // keep what we read; the tail is the inter-region gap, legitimately empty. Any OTHER failure
+        // (transient after retries, XOR, unexpected) propagates — a genuine failure must abort.
         if (e instanceof PgError && e.nok === 0x03) break;
         throw e;
       }
       out.set(data, off);
       off += n;
-      chunk = Math.min(chunk, count - off) || chunk; // stay small near a border (avoid ping-pong)
       const el = (Date.now() - t0) / 1000;
       this.onProgress?.({ label, done: off, total: count, elapsedS: el });
-      if (off - lastLoggedAt >= 512 || off === count) {
+      if (off - lastLoggedAt >= 256 || off === count) {
         this.logger.log('  ' + label + ': ' + off + '/' + count + ' bytes (' + Math.round((off / count) * 100) + '%), ' + el.toFixed(0) + 's', 'mut');
         lastLoggedAt = off;
       }
@@ -347,7 +341,7 @@ export class Connection {
     if (off === count) {
       this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
     } else if (off > 0) {
-      this.logger.log('  ' + label + ': read ' + off + '/' + count + ' bytes via Read Block (region ends at its content boundary; the rest is gap).', 'ok');
+      this.logger.log('  ' + label + ': read ' + off + '/' + count + ' bytes via Read Block (region content ends here; rest zero-filled).', 'ok');
     } else {
       this.logger.log('  ' + label + ': no readable content (Read Block rejected at the region start).', 'err');
     }
@@ -361,11 +355,11 @@ export class Connection {
    * `0x00FF0EE8`, i.e. ILLEGAL ACCESS to an unmapped region, not "block reads unsupported". Returns
    * only checksum-verified complete data; exceptions are typed and transient failures are retried.
    */
-  async readBlock(addr: number, count: number, label = 'Read Block'): Promise<Uint8Array> {
+  async readBlock(addr: number, count: number, label = 'Read Block', recoverOnReject = true): Promise<Uint8Array> {
     if (!Number.isInteger(count) || count <= 0 || count > 0xffff) throw new RangeError('Read Block count must be 1..65535');
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.readBlockOnce(addr, count, label);
+        return await this.readBlockOnce(addr, count, label, recoverOnReject);
       } catch (e) {
         if (e instanceof PgError) throw e;
         if (this.abort || attempt >= Connection.RETRIES) throw e;
@@ -374,7 +368,7 @@ export class Connection {
     }
   }
 
-  private async readBlockOnce(addr: number, count: number, label: string): Promise<Uint8Array> {
+  private async readBlockOnce(addr: number, count: number, label: string, recoverOnReject = true): Promise<Uint8Array> {
     const cmd = new Uint8Array([OP.READ_BLOCK, ...encodeAddr(this.device, addr), (count >> 8) & 0xff, count & 0xff]);
     await this.xport.read(4096, 60);
     await this.xport.write(cmd);
@@ -386,7 +380,7 @@ export class Connection {
     if (t0[0] === OP.NOK) {
       const e = await this.xport.read(1, 900);
       this.logger.log('  ' + label + ' rejected: NOK 15 ' + hex(e) + (e.length ? '  ' + cpuErrText(e[0]) : ''), 'err');
-      await this.recover();
+      if (recoverOnReject) await this.recover();
       throw new PgError(label + ' rejected — ' + (e.length ? cpuErrText(e[0]) : 'missing exception code'), e.length ? e[0] : undefined);
     }
     if (t0[0] !== OP.ACK) {
@@ -400,7 +394,7 @@ export class Connection {
     const prefix = await this.xport.read(Math.min(3, count + 1), 2000);
     if (prefix.length === 2 && prefix[0] === OP.NOK && prefix[1] >= 0x01 && prefix[1] <= 0x07) {
       this.logger.log('  ' + label + ' → 06 then NOK 15 ' + prefix[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(prefix[1]), 'err');
-      await this.recover();
+      if (recoverOnReject) await this.recover();
       throw new PgError(label + ' rejected — ' + cpuErrText(prefix[1]), prefix[1]);
     }
     const remainder = count + 1 - prefix.length;

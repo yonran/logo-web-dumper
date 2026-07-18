@@ -104,16 +104,18 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('readRegionViaBlock backs off at a region border and reads exactly the mapped content', async () => {
-  // A Memory region whose real content (100 bytes) is shorter than the window we ask for (300).
-  // An illegal-access at the border (0x03) means "region ends here", NOT a failure — the reader must
-  // back the chunk off, capture the 100 real bytes, and stop (the gap tail is legitimately empty).
-  const { c, l } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(100).fill(0xab) });
+test('readRegionViaBlock stops at a region border and keeps the content read so far', async () => {
+  // A Memory region whose real content (96 bytes) is shorter than the window we ask for (300).
+  // An illegal-access at the border (0x03) means "region ends here", NOT a failure: the reader stops
+  // and keeps what it captured (the gap tail is legitimately empty). It must NOT recover/Restart —
+  // that would re-lock the program on real hardware.
+  const { c, l, d } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(96).fill(0xab) });
   const out = await c.readRegionViaBlock(c.mem.programBase, 300, 'prog');
   assert.equal(out.length, 300);
-  assert.ok([...out.slice(0, 100)].every((b) => b === 0xab), 'first 100 bytes are the real content');
-  assert.ok([...out.slice(100)].every((b) => b === 0x00), 'the unreadable gap tail is zero-filled');
-  assert.ok(l.lines.some((x) => x.includes('region ends at its content boundary')));
+  assert.ok([...out.slice(0, 96)].every((b) => b === 0xab), 'the 96 real bytes are captured');
+  assert.ok([...out.slice(96)].every((b) => b === 0x00), 'past the content is zero-filled');
+  assert.ok(l.lines.some((x) => x.includes('region content ends here')));
+  assert.equal(d.writes.filter((w) => w[0] === 0x22).length, 0, 'no Restart (would re-lock the program)');
 });
 
 test('readRegionViaBlock propagates a genuine (non-border) Read Block failure', async () => {

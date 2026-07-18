@@ -31,23 +31,24 @@ export async function readAllAndDecode(app: App): Promise<void> {
   const mem = conn.mem;
   const total = mem.regions.reduce((n, r) => n + r.len, 0);
   const via = mem.readMode === 'block' ? 'Read Block (0x05)' : 'Read Byte (0x02)';
-  const est = mem.readMode === 'block' ? Math.round(total / 900) : Math.round(total / 30);
+  const est = mem.readMode === 'block' ? Math.round(total / 300) : Math.round(total / 30);
   app.log('Reading the program image for ' + conn.deviceName + ' (' + total + ' bytes via ' + via + ', ~' + est + 's)…', 'mut');
   app.log('Press “Abort” to stop.', 'mut');
-  const full = new Uint8Array(total);
+  let full: Uint8Array;
   if (mem.readMode === 'block') {
-    // Block mode (0BA6): read every Memory object SEPARATELY (Read Block cannot cross a region
-    // border) and place it at its address offset. A genuine failure still throws; only an expected
-    // region-end (illegal access at the content boundary) is handled inside readRegionViaBlock.
-    // Read the big program-BODY region FIRST — it reads cleanly, whereas the small metadata regions
-    // back off at their borders (a few Restarts each); reading the body first banks it before that
-    // churn can disturb the session.
+    // Block mode (0BA6): read every Memory region SEPARATELY at its EXACT length (Read Block cannot
+    // cross a region border, and reading past a region's real content latches → re-locks). Place
+    // each at its address offset; the image spans minBase … max(base+len) (regions have gaps). Read
+    // the big program-BODY region FIRST so it is banked even if a later region ends early.
     const minBase = Math.min(...mem.regions.map((r) => r.base));
+    const span = Math.max(...mem.regions.map((r) => r.base + r.len)) - minBase;
+    full = new Uint8Array(span);
     for (const r of [...mem.regions].sort((a, b) => b.len - a.len)) {
       const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
-      full.set(data, (r.base - minBase) >>> 0);
+      full.set(data.subarray(0, r.len), (r.base - minBase) >>> 0);
     }
   } else {
+    full = new Uint8Array(total);
     // Byte mode (legacy 0BA4/0BA5): the artificial 2460-byte combined layout, read in order.
     let o = 0;
     for (const r of mem.regions) {

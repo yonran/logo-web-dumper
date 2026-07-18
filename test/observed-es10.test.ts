@@ -141,9 +141,9 @@ test('0BA6 read pulls the program image via Read Block from the bare Logo6 map (
   // BARE offset-table base 0x00002FAA (00 00 2f aa) — Memory reads aren't paged.
   const imgRead = h.device.writes.find((w) => w[0] === 0x05 && w[1] === 0x00 && w[2] === 0x00 && w[3] === 0x2f && w[4] === 0xaa);
   assert.ok(imgRead, 'reads the 0BA6 image base 0x00002FAA via Read Block');
-  // The full 13464-byte image is saved, with the program body at offset 0x3292-0x2FAA = 744.
+  // The image spans 0x00002FAA..0x00003292+3800 = 4544 bytes; the program body sits at offset 744.
   assert.equal(h.ui.downloads.length, 1);
-  assert.equal(h.ui.downloads[0].bytes.length, 13464);
+  assert.equal(h.ui.downloads[0].bytes.length, 4544);
   assert.equal(h.ui.downloads[0].bytes[744], 0x5a);
   // No decoder for 0BA6 yet, but the raw bytes are captured and the dump is marked done.
   assert.ok(logged(h.logger, 'Raw program image captured') || logged(h.logger, 'No netlist decoder'));
@@ -167,7 +167,7 @@ test('full read preserves the session that was successfully unlocked', async () 
   const reconnectsAfter = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
   assert.equal(reconnectsAfter, reconnectsBefore, 'must not restart/reconnect after a verified unlock');
   assert.equal(h.ui.downloads.length, 1);
-  assert.equal(h.ui.downloads[0].bytes.length, 13464);
+  assert.equal(h.ui.downloads[0].bytes.length, 4544);
 });
 
 test('full read aborts and saves nothing on a GENUINE Read Block failure after unlock', async () => {
