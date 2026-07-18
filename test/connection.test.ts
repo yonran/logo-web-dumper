@@ -163,6 +163,46 @@ test('0BA6 map on the wire: password AND program are BARE (0x00000566 / 0x000032
   assert.deepEqual([...pwdRead.slice(1, 5)], [0x00, 0x00, 0x05, 0x66]);
 });
 
+test('ES10 size cap: a Read Block larger than the cap is rejected and latches (opt-in model)', async () => {
+  // Hardware: a 16-byte block works, a 512-byte block returns 06 15 03. The exact cap is still a
+  // single observation, so it is modelled opt-in; here we set it to 16 and prove both sides.
+  const { c } = make({ passwordExists: false, blockReadsWork: true, maxBlockCount: 16, program: new Uint8Array(64).fill(0x11) });
+  assert.deepEqual([...(await c.readBlock(c.mem.programBase, 16))], new Array(16).fill(0x11));
+  await assert.rejects(c.readBlock(c.mem.programBase, 32), /NOK|03|reject/i);
+});
+
+test('ES10 block window re-locks after a mode query — the reason the fast path avoids getMode (opt-in model)', async () => {
+  // The clear write opens the block window; the very next Read Block succeeds. But a 0x55 mode
+  // query issued afterwards re-locks it, so the following Read Block faults 06 15 03 — exactly the
+  // hardware failure that readAllAndDecode's fast path sidesteps by never calling getMode after the
+  // clear write when already unlocked.
+  const prog = new Uint8Array(16).fill(0x22);
+  const { c } = make({ passwordExists: true, clearWriteUnlocks: true, blockReadsWork: true, relockOnModeQuery: true, program: prog });
+  await c.writeByte(ADDR.PL_CLEAR, 0x00);
+  assert.deepEqual([...(await c.readBlock(c.mem.programBase, 16))], [...prog], 'window is open right after the clear write');
+  await c.getMode(); // <-- re-locks the window on the ES10
+  await assert.rejects(c.readBlock(c.mem.programBase, 16), /NOK|03|reject/i);
+});
+
+test('ES10 block window re-locks after a PAGED 0x48FF read — the other trigger the fast path avoids (opt-in model)', async () => {
+  const prog = new Uint8Array(16).fill(0x33);
+  const { c } = make({ passwordExists: true, clearWriteUnlocks: true, blockReadsWork: true, relockOnPagedRead: true, program: prog });
+  await c.writeByte(ADDR.PL_CLEAR, 0x00);
+  assert.deepEqual([...(await c.readBlock(c.mem.programBase, 16))], [...prog]);
+  await c.readByte(ADDR.PWD_EXISTS); // paged read of 0x00FF48FF re-locks the window
+  await assert.rejects(c.readBlock(c.mem.programBase, 16), /NOK|03|reject/i);
+});
+
+test('fast path: clear write → Read Block with nothing in between keeps the window open (opt-in model)', async () => {
+  // The positive control for the two re-lock tests: with the SAME relock flags on, going straight
+  // from the clear write to Read Block (no getMode, no paged read) reads the whole program.
+  const prog = Uint8Array.from({ length: 48 }, (_, i) => i);
+  const { c } = make({ passwordExists: true, clearWriteUnlocks: true, blockReadsWork: true, relockOnModeQuery: true, relockOnPagedRead: true, program: prog });
+  await c.writeByte(ADDR.PL_CLEAR, 0x00);
+  const got = await c.readRegionViaBlock(c.mem.programBase, 48, 'prog');
+  assert.deepEqual([...got], [...prog]);
+});
+
 test('readRegion reads a run of bytes via Read Byte', async () => {
   const prog = new Uint8Array([0x10, 0x20, 0x30, 0x40]);
   const { c } = make({ program: prog }); // no password → readable

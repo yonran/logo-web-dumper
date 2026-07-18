@@ -56,6 +56,14 @@ export interface FakeDeviceConfig {
   // access 0x03, "read across the border"), like the real ES10 reading past a Memory region's end.
   blockRejectUnmapped?: boolean;
   rejectBlockAt?: number; // force a latched 06 15 03 at this exact block start
+  // Opt-in models of two ES10 behaviours that are each still SINGLE-observation / inferred (2026-07-17),
+  // so they are OFF by default — the default fake must not silently assert an exact cap or trigger.
+  maxBlockCount?: number; // a Read Block asking for MORE than this many bytes is rejected 06 15 03
+  //  and latches (observed: 16 works, 512 fails). Set the cap a test wants to model.
+  // The block-read window re-locks (next Read Block → latched 06 15 03) if, AFTER the clear write
+  // opened it, one of these is issued — the inference behind readAllAndDecode's fast path.
+  relockOnModeQuery?: boolean; // a 0x55 mode query re-locks the window
+  relockOnPagedRead?: boolean; // a PAGED Read Byte of 0x00FF48FF re-locks the window
   password?: string; // stored cleartext (≤10 chars)
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
@@ -79,6 +87,9 @@ export class FakeDevice implements Transport {
   private mode: number;
   private latched = false; // after an exception, everything NOKs until Restart
   private protectionLowered = false;
+  // The block-read window: opened by the clear write, re-locked by a mode query / paged read when
+  // the corresponding opt-in flag is set. `false` here means the next Read Block latches 06 15 03.
+  private blockWindowOpen = true;
   private flakyLeft: number;
   private flakyBlocksLeft: number;
   private corruptBlocksLeft: number;
@@ -204,10 +215,13 @@ export class FakeDevice implements Transport {
       // Protection lowering is session-scoped. Restarting to clear a protocol exception loses it,
       // which is why a program capture must abort instead of recovering and continuing.
       this.protectionLowered = false;
+      this.blockWindowOpen = true; // back to the pre-clear state (progReadable now gates the data)
       this.push(0x06);
       return;
     }
     if (op === 0x55) {
+      // A mode query re-locks the just-opened block window on the ES10 (opt-in inference).
+      if (this.cfg.relockOnModeQuery) this.blockWindowOpen = false;
       if (cmd[1] === 0x17) {
         this.push(0x06, this.mode);
       } else if (cmd[1] === 0x12) {
@@ -234,6 +248,8 @@ export class FakeDevice implements Transport {
         this.flakyLeft--;
         return;
       }
+      // A PAGED read of 0x00FF48FF re-locks the just-opened block window on the ES10 (opt-in).
+      if (this.cfg.relockOnPagedRead && this.addr(cmd) === this.wire(BASE.PWD_EXISTS)) this.blockWindowOpen = false;
       // Read Byte → ACK, 0x03, echoed address (width bytes), value. Never faults.
       const value = this.readMem(this.addr(cmd));
       const echo = [...cmd.slice(1, 1 + w)];
@@ -243,8 +259,10 @@ export class FakeDevice implements Transport {
     if (op === 0x01) {
       // Write Byte → ACK. Only 0x4800 clears / 0x4801 re-locks; other registers do nothing.
       const a = this.addr(cmd);
-      if (a === this.wire(BASE.CLEAR)) this.protectionLowered = true;
-      else if (a === this.wire(BASE.SET)) this.protectionLowered = false;
+      if (a === this.wire(BASE.CLEAR)) {
+        this.protectionLowered = true;
+        this.blockWindowOpen = true; // the clear write (re-)opens the block-read window
+      } else if (a === this.wire(BASE.SET)) this.protectionLowered = false;
       this.push(0x06);
       return;
     }
@@ -262,6 +280,18 @@ export class FakeDevice implements Transport {
       const a = this.addr(cmd);
       const count = (cmd[1 + w] << 8) | cmd[2 + w];
       if (a === this.cfg.rejectBlockAt) {
+        this.latched = true;
+        this.push(0x06, 0x15, 0x03);
+        return;
+      }
+      // A telegram larger than the ES10's cap is illegal access (opt-in; 16 works, 512 doesn't).
+      if (this.cfg.maxBlockCount !== undefined && count > this.cfg.maxBlockCount) {
+        this.latched = true;
+        this.push(0x06, 0x15, 0x03);
+        return;
+      }
+      // The block window was re-locked (by a mode query / paged read) since the last clear write.
+      if (!this.blockWindowOpen) {
         this.latched = true;
         this.push(0x06, 0x15, 0x03);
         return;

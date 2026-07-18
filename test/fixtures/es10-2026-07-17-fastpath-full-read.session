@@ -1,0 +1,49 @@
+# LOGO! PG session capture — real hardware
+# device: identNo=45 mode=42 passwordExists=1 clearWriteUnlocks=1 blockReadsWork=1 program=010019802180ffffffffffff01001f800ac0ffffffffffff010020800dc0ffffffffffff010019802280ffffffffffff
+# source: 0BA6.ES10, WebUSB / CH340, fw V1.07.07, 2026-07-17
+#
+# THE FAST-PATH RUN THAT RECOVERED THE PROGRAM. This is the session that captured the full
+# 3800-byte program body (logo_0ba6_es10_program.bin, 98% populated) and the complete 15074-byte
+# LSC image. It confirms on hardware that the fix in readAllAndDecode() works: when already
+# unlocked, the tool re-asserts the clear write (0x00FF4800 = 0) and goes STRAIGHT into 16-byte
+# Read Blocks — with NO mode query (0x55) and NO paged register read (0x00FF48FF) in between,
+# because either of those RE-LOCKS the just-opened block window on the ES10.
+#
+# All 238 program-body Read Blocks came back "06 <16 data> <xor>" with no NOK 03 — the block
+# window stayed open for the entire read precisely because nothing re-locked it.
+#
+# Format: one exchange per line, "→ <request hex>   ← <response hex | (nothing)>   (note)". The
+# replay test (test/session-replay.test.ts) builds a FakeDevice from the `# device:` header and
+# asserts the fake reproduces each recorded response exactly.
+
+# --- connect + confirm STOP + protection flag (step 3 unlock preamble) ---
+→ 22   ← 06   (Restart — clears the error state)
+→ 21   ← 06 03 21 45   (IdentNo 0x45 = 0BA6.ES10)
+→ 55 17 17 aa   ← 06 42   (mode = STOP)
+→ 02 00 ff 48 ff   ← 06 03 00 ff 48 ff 40   (password IS set: 0x40)
+
+# --- the CLEAR write that lowers protection and opens the block window ---
+→ 01 00 ff 48 00 00   ← 06   (CLEAR protection: Write Byte 0x00FF4800 = 0x00)
+
+# --- FAST PATH: re-assert the clear write, then read the program head immediately, nothing between.
+# The tool issues one more 0x00FF4800 = 0 (defensive, in case the probe's mode/register reads had
+# re-locked the window) and then goes straight to Read Block. On the wire that is:
+→ 01 00 ff 48 00 00   ← 06   (re-assert CLEAR — the fast path's first act)
+
+# --- program body via 16-byte Read Blocks at BARE 0x00003292, 0x000032a2, 0x000032b2 … (238 total).
+# Real data + valid XOR checksum on every block; here are the first three (the rest are identical
+# in form, incrementing the address by 0x10 each time up to the 3800-byte program length):
+→ 05 00 00 32 92 00 10   ← 06 01 00 19 80 21 80 ff ff ff ff ff ff 01 00 1f 80 a7
+→ 05 00 00 32 a2 00 10   ← 06 0a c0 ff ff ff ff ff ff 01 00 20 80 0d c0 ff ff a6
+→ 05 00 00 32 b2 00 10   ← 06 ff ff ff ff 01 00 19 80 22 80 ff ff ff ff ff ff 3a
+
+# --- CONFIRMED hardware facts this run establishes (previously only observed once / inferred) ---
+# • The fast path reads the ENTIRE 3800-byte program with the window open the whole time — proof
+#   that going clear-write → Read Block with nothing in between avoids the re-lock.
+# • Read BYTE probes at the program addresses (0x00003292, +64, +256) returned 16 bytes each but
+#   are NOT the program: on the ES10 the program is block-only, so those bytes are not the data —
+#   only the Read Block returns the real program. (Logged by the tool as probes; not asserted here.)
+# • Still single-observation / inferred, so NOT baked into the fake as default behaviour: the exact
+#   Read Block size cap (16 works, 512 → NOK 03) and the precise re-lock trigger (a 0x55 mode query
+#   or a 0x00FF48FF paged read after the clear write). The fake models both as OPT-IN flags
+#   (maxBlockCount, relockOnModeQuery / relockOnPagedRead) exercised by connection.test.ts.
