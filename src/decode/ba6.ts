@@ -96,6 +96,51 @@ export function connector(word: number): string | null {
   return neg + 'I' + (v + 1);
 }
 
+/** Basic functions (0x01–0x08) have NO BlockParameter, so LSC never applies the flag bits to them. */
+function isBasicGate(op: number): boolean {
+  return op >= 0x01 && op <= 0x08;
+}
+
+/**
+ * Special-function opcodes whose parameter is a `ProtectionParameter` subclass — the ONLY blocks for
+ * which the protection flag (opcode high-byte bit 0x40 == 0) is meaningful. From the LSC parameter
+ * class hierarchy: PulseRelay (0x23), LatchingRelay (0x25) and ShiftRegister (0x38) use a plain
+ * BlockParameter and are therefore NEVER protected; every other SF here extends ProtectionParameter.
+ */
+const PROTECTION = new Set([
+  0x21, 0x22, 0x24, 0x27, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x39,
+  0x3a, 0x3b, 0x3c, 0x40, 0x41, 0x42, 0x43, 0x44,
+]);
+
+/**
+ * Timer blocks whose record stores plain time words immediately after the input connectors, in this
+ * order. (Blocks with cam/analog/counter parameters instead of plain times are omitted — their
+ * parameter bytes are shown raw rather than mis-decoded as times.)
+ */
+const TIME_PARAMS: Record<number, readonly string[]> = {
+  0x21: ['T'], // on-delay
+  0x22: ['T'], // off-delay
+  0x27: ['T'], // ret-on-delay
+  0x2a: ['T'], // wiping-relay (pulse width)
+  0x2d: ['TH', 'TL'], // async-pulse-gen
+  0x2f: ['TH', 'TL'], // on/off-delay
+  0x30: ['TH', 'TL'], // random
+};
+
+/**
+ * Decode a LOGO! time word: the top 2 bits select the base, the low 14 bits the value.
+ * base 0/1 = seconds (value = hundredths, shown S.cc s); 2 = minutes (mm:ss); 3 = hours (hh:mm).
+ * Matches CompilerFromLogo(4).getNewTimeObject.
+ */
+export function decodeTime(word: number): string {
+  const base = word & 0xc000;
+  const v = word & 0x3fff;
+  if (base === 0x0000 || base === 0x4000) return (v / 100).toFixed(2) + 's';
+  const a = Math.floor(v / 60);
+  const b = String(v % 60).padStart(2, '0');
+  return base === 0x8000 ? a + ':' + b + 'm' : a + ':' + b + 'h';
+}
+
 /** Read user block names: name-index @0x0688 holds the program line, strings @0x0708 are 8-byte slots. */
 function readNames(img: Uint8Array): Map<number, string> {
   const names = new Map<number, string>();
@@ -160,9 +205,13 @@ export function decode0BA6(img: Uint8Array): string | null {
     const op = img[base];
     const hi = img[base + 1];
     const spec = OPCODES[op];
+    // Flags apply only where LSC applies them: never to a basic gate (no parameter), and the
+    // protection flag only to blocks whose parameter is a ProtectionParameter (see compileOpcode).
     const flags: string[] = [];
-    if (hi & 0x80) flags.push('remanent');
-    if (!(hi & 0x40)) flags.push('protected');
+    if (!isBasicGate(op)) {
+      if (hi & 0x80) flags.push('remanent');
+      if (PROTECTION.has(op) && !(hi & 0x40)) flags.push('protected');
+    }
     const flagStr = flags.length ? '  [' + flags.join(', ') + ']' : '';
     if (!spec) {
       out.push('  ' + label + ' = ??? function 0x' + op.toString(16).padStart(2, '0') + flagStr);
@@ -175,7 +224,14 @@ export function decode0BA6(img: Uint8Array): string | null {
       if (wo + 1 >= img.length) break;
       inputs.push(connector(w16(img, wo)) ?? '·');
     }
-    out.push('  ' + label + ' = ' + name + '(' + inputs.join(', ') + ')' + flagStr);
+    // Time parameters (for timer blocks) sit as plain words right after the input connectors.
+    const params: string[] = [];
+    for (const [k, plabel] of (TIME_PARAMS[op] ?? []).entries()) {
+      const wo = base + 2 + nIn * 2 + k * 2;
+      if (wo + 1 < img.length) params.push(plabel + '=' + decodeTime(w16(img, wo)));
+    }
+    const paramStr = params.length ? '  ' + params.join(' ') : '';
+    out.push('  ' + label + ' = ' + name + '(' + inputs.join(', ') + ')' + paramStr + flagStr);
   }
 
   out.push('');
@@ -205,9 +261,9 @@ export function decode0BA6(img: Uint8Array): string | null {
 
   out.push('');
   out.push(
-    'Decoded ' + present.length + ' blocks from the 0BA6 program. Basic gates and wiring are exact; ' +
-      'special-function parameters (timer/counter values) are held in each record after the inputs — ' +
-      'ask if you want those decoded too.',
+    'Decoded ' + present.length + ' blocks from the 0BA6 program. Basic gates, wiring, and timer ' +
+      'values are exact. `/X` marks an inverted input; [remanent]/[protected] are per-block flags. ' +
+      'Non-timer special-function parameters (counter limits, analog gains) are not decoded yet.',
   );
   return out.join('\n');
 }
