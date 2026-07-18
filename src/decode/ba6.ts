@@ -285,9 +285,26 @@ function nodeShape(op: number, text: string): string {
 }
 
 /**
+ * The IEC 60617 qualifying symbol LSC draws inside a basic-gate box: `&` for AND-family, `≥1` for
+ * OR-family, `=1` for XOR, `1` for a buffer/NOT. NAND/NOR/edge variants share the base symbol (LSC
+ * adds an output bubble / edge mark); the block name still spells out the exact variant.
+ */
+const GATE_SYMBOL: Record<number, string> = {
+  0x01: '&',
+  0x02: '≥1',
+  0x03: '1',
+  0x04: '&',
+  0x05: '≥1',
+  0x06: '=1',
+  0x07: '&',
+  0x08: '&',
+};
+
+/**
  * Render the decoded 0BA6 program as a Mermaid `flowchart LR`: inputs on the left flowing through
- * the blocks to the outputs, dotted "NOT" edges for inverted inputs. Returns null for a non-0BA6
- * image. The output is Mermaid source text — the caller decides how to render/link it.
+ * the blocks to the outputs. Basic gates carry LSC's IEC symbol (`&`, `≥1`, `=1`), and an inverted
+ * input is a circle-ending link (the LSC negation bubble). Returns null for a non-0BA6 image. The
+ * output is Mermaid source text — the caller decides how to render/link it.
  */
 export function toMermaid(img: Uint8Array): string | null {
   if (img.length < PROGRAM_BODY - MIN_BASE + 4) return null;
@@ -305,8 +322,10 @@ export function toMermaid(img: Uint8Array): string | null {
   const nodeLines: string[] = [];
   const edges: string[] = [];
   const inputTerms = new Set<string>(); // I*/AI* terminals referenced as sources
+  // A negated input uses Mermaid's circle-ending link (`--o`), which draws a bubble at the block's
+  // input pin — the same inversion mark LSC puts there. A normal input is a plain arrow.
   const addEdge = (from: string, to: string, neg: boolean): void => {
-    edges.push('  ' + from + (neg ? ' -. NOT .-> ' : ' --> ') + to);
+    edges.push('  ' + from + (neg ? ' --o ' : ' --> ') + to);
     if (/^A?I\d+$/.test(from)) inputTerms.add(from);
   };
 
@@ -319,7 +338,7 @@ export function toMermaid(img: Uint8Array): string | null {
     const type = spec ? spec[0] : 'op' + op.toString(16).padStart(2, '0');
     let text = id;
     if (names.has(n)) text += " '" + names.get(n) + "'";
-    text += '<br/>' + type;
+    text += '<br/>' + (GATE_SYMBOL[op] ? GATE_SYMBOL[op] + ' ' : '') + type;
     for (const [k, plabel] of (TIME_PARAMS[op] ?? []).entries()) {
       const wo = base + 2 + (spec ? spec[2] : 0) * 2 + k * 2;
       if (wo + 1 < img.length) text += ' ' + plabel + '=' + decodeTime(w16(img, wo));

@@ -114,10 +114,10 @@ test('toMermaid: emits a flowchart with nodes, shapes, inverted edges, and outpu
   assert.match(m, /^flowchart LR/);
   assert.match(m, /subgraph IN\[inputs\]/);
   assert.match(m, /I1\(\["I1"\]\)/); // input terminal as a stadium node
-  assert.match(m, /B001\["B001<br\/>AND"\]/); // gate as a rectangle
+  assert.match(m, /B001\["B001<br\/>& AND"\]/); // gate as a rectangle carrying the IEC symbol
   assert.match(m, /B002\{\{"B002 'TMR'<br\/>on-delay T=3\.00s"\}\}/); // timer as a hexagon with its value
   assert.match(m, /I1 --> B001/); // normal edge
-  assert.match(m, /B002 -\. NOT \.-> B001/); // inverted input as a dotted NOT edge
+  assert.match(m, /B002 --o B001/); // inverted input as a circle-ending link (the LSC negation bubble)
   assert.match(m, /subgraph OUT\[outputs\]/);
   assert.match(m, /B001 --> Q1/); // output driver edge
 });
