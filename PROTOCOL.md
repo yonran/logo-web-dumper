@@ -277,13 +277,20 @@ layout. This tool selects the map from the detected IdentNo (see `src/pg/device.
 | Anchor tables (6 reads) | `31CA`…`327E` | bare | 40, 60, 20, 40, 20, 20 |
 | **Program memory** | `3292` | **`0x00003292`** | 3800 |
 
-`Logo6.getMemories` declares 11 top-level objects; `MessageMemoryRTF` expands into seven transfers,
-so an upload performs **17 exact Memory reads in declaration order**. Their actual payload totals
-**12,797 bytes**. The tool places those bytes at address-relative offsets in a **15,074-byte** raw
-image spanning `0x0688…0x416A`; gaps remain zero and are never requested. LSC's
-`getNumberOfUploadTransferBytes() == 13,464` is a nominal progress estimate, not a contiguous range
-or the sum of the wire reads. Any exception or incomplete transfer aborts the capture rather than
-zero-filling a partial file. There is **no 0BA6 netlist decoder yet**.
+`Logo6.getMemories` declares 11 top-level objects; `MessageMemoryRTF` expands into seven logical
+ranges. The fixed allocations plus the complete 6,400-byte message-text capacity total 12,797
+bytes, but that is **not normally the wire-byte count**. On a real (non-virtual) connection LSC uses
+`fastUploadMessageText`: after reading the 100-byte offset table, it reads only populated 128-byte
+message records, coalescing populated IDs separated by at most two unused IDs. Thus the actual
+payload is data-dependent: **6,397 bytes plus selected message-text runs (0…6,400 bytes)**.
+
+The tool reads the proven program body first as a hardware-safety measure, then reproduces that LSC
+message-selection algorithm for the remaining memories. It places results at address-relative
+offsets in a **15,074-byte** raw image spanning `0x0688…0x416A`; address gaps and unused message
+slots remain zero and are never requested. LSC's `getNumberOfUploadTransferBytes() == 13,464` is a
+nominal progress estimate, not a contiguous range or actual wire total. Any exception aborts the
+composite image; the independently completed program-body artifact is retained. There is **no 0BA6
+netlist decoder yet**.
 
 > 🔴 **These program addresses are BARE, not paged.** The `≥0x1F00 → OR 0xFF0000` paging lives in
 > `getAdress`, which is used for the *symbolic register* reads (flag `0x48FF`, magic `0x1F00`,
