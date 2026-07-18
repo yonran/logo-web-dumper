@@ -34,12 +34,18 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
   full.set(progData, (progR.base - minBase) >>> 0);
   const progNz = progData.reduce((n, b) => n + (b ? 1 : 0), 0);
   const progFname = 'logo_' + slug + '_program.bin';
-  app.ui.download(progFname, progData);
   app.store.set({ dumped: true });
+  // The program body is a subset of the full image (which is what actually decodes), so on a
+  // successful run we do NOT download it separately — full.bin below supersedes it. It is only
+  // written on its own as a FALLBACK: if it read back empty (a problem worth a diagnostic file), or
+  // if the fragile Tier-2 read aborts before the full image is assembled (see the catch below).
+  let progSaved = false;
   if (progNz === 0) {
-    app.log('⚠ Program body read back ALL ZERO (' + progData.length + ' bytes) — the program is not unlocked (run step 3 first) or block-read did not open. Saved anyway for diagnosis.', 'err');
+    app.ui.download(progFname, progData);
+    progSaved = true;
+    app.log('⚠ Program body read back ALL ZERO (' + progData.length + ' bytes) — the program is not unlocked (run step 3 first) or block-read did not open. Saved ' + progFname + ' for diagnosis.', 'err');
   } else {
-    app.log('✅ Program body captured: ' + progData.length + ' bytes (' + progNz + ' non-zero) → ' + progFname, 'ok');
+    app.log('✅ Program body captured: ' + progData.length + ' bytes (' + progNz + ' non-zero) — it is included in the full image below.', 'ok');
   }
 
   // ---- Tier 2: remaining LSC memories. The normal serial path uses fastUploadMessageText:
@@ -73,7 +79,10 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
       if (r.name === 'message offset table') messageOffsets = data;
     }
   } catch (e) {
-    app.log('Complete LSC image aborted: ' + (e instanceof Error ? e.message : String(e)) + '. The program-body artifact is retained; no partial full image was saved.', 'err');
+    // The full image failed to assemble — fall back to saving just the program body we captured in
+    // Tier 1 (unless it was already saved as an all-zero diagnostic), so the run isn't a total loss.
+    if (!progSaved) app.ui.download(progFname, progData);
+    app.log('Complete LSC image aborted: ' + (e instanceof Error ? e.message : String(e)) + '. Saved the program body as ' + progFname + ' (fallback); no full image was written. Note: program.bin alone cannot be decoded — it lacks the offset/anchor tables.', 'err');
     return;
   }
 

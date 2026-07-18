@@ -166,15 +166,15 @@ test('0BA6 reads program first, then reproduces LSC sparse message-text selectio
     false,
     'does not read the unused gap between the two LSC runs',
   );
-  // Two-tier output: a reliable program-body artifact plus the address-preserving full image.
-  assert.equal(h.ui.downloads.length, 2);
-  const prog = h.ui.downloads.find((d) => d.name.endsWith('_program.bin'));
+  // On success only the address-preserving full image is saved — it already contains the program
+  // body, so the separate program.bin is emitted only as a fallback when the metadata read fails.
+  assert.equal(h.ui.downloads.length, 1);
   const image = h.ui.downloads.find((d) => d.name.endsWith('_full.bin'));
-  assert.ok(prog && image, 'saves both a program artifact and a full image');
-  assert.equal(prog.bytes[0], 0x5a);
+  assert.ok(image, 'saves the full image');
+  assert.equal(h.ui.downloads.some((d) => d.name.endsWith('_program.bin')), false, 'no separate program.bin on a successful run');
   // Full image spans 0x0688..0x3292+3800 = 15074; the body begins at offset 0x3292-0x0688 = 11274.
   assert.equal(image.bytes.length, 15_074);
-  assert.equal(image.bytes[11_274], 0x5a);
+  assert.equal(image.bytes[11_274], 0x5a, 'the program body is present inside the full image');
   assert.equal(h.store.get().dumped, true);
 });
 
@@ -216,8 +216,8 @@ test('full read preserves the session that was successfully unlocked', async () 
   await readAllAndDecode(h.app);
   const reconnectsAfter = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
   assert.equal(reconnectsAfter, reconnectsBefore, 'must not restart/reconnect after a verified unlock');
-  // Two-tier: a program artifact + the full image; a clean read (no fault) needs no Restart.
-  assert.equal(h.ui.downloads.length, 2);
+  // A clean read (no fault) needs no Restart and saves a single artifact: the full image.
+  assert.equal(h.ui.downloads.length, 1);
   assert.equal(h.ui.downloads.find((d) => d.name.endsWith('_full.bin'))?.bytes.length, 15_074);
 });
 
