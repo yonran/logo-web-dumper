@@ -104,6 +104,18 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
+test('readRegionViaBlock backs off at a region border and reads exactly the mapped content', async () => {
+  // A Memory region whose real content (100 bytes) is shorter than the window we ask for (300).
+  // Read Block rejects any read into the unmapped tail (like the ES10 "read across the border"), so
+  // the adaptive reader must back the chunk off, capture the 100 mapped bytes, and stop.
+  const { c, l } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(100).fill(0xab) });
+  const out = await c.readRegionViaBlock(c.mem.programBase, 300, 'prog');
+  assert.equal(out.length, 300);
+  assert.ok([...out.slice(0, 100)].every((b) => b === 0xab), 'first 100 bytes are the real content');
+  assert.ok([...out.slice(100)].every((b) => b === 0x00), 'the unreadable tail is zero-filled');
+  assert.ok(l.lines.some((x) => x.includes('region ends before its max window')));
+});
+
 test('0BA6 map on the wire: password AND program are BARE (0x00000566 / 0x00003292)', async () => {
   // The program is a Memory read (readByteArray on the raw base), so it is NOT paged — bare
   // 0x00003292. Only symbolic register reads get the 0xFF page. If the tool regressed to the paged

@@ -304,35 +304,48 @@ export class Connection {
    * failure we stop and return what we have (zero-filled tail) rather than risk churning recovery.
    * Honours `abort`.
    */
-  async readRegionViaBlock(addr: number, count: number, label: string, chunk = 512): Promise<Uint8Array> {
+  async readRegionViaBlock(addr: number, count: number, label: string, maxChunk = 512): Promise<Uint8Array> {
     const out = new Uint8Array(count);
     const t0 = Date.now();
-    let done = 0;
+    let off = 0;
+    let chunk = Math.min(maxChunk, count);
+    let lastLoggedAt = -1;
     this.onProgress?.({ label, done: 0, total: count, elapsedS: 0 });
-    for (let off = 0; off < count; off += chunk) {
+    while (off < count) {
       if (this.abort) {
         this.logger.log('  aborted at ' + off + '/' + count, 'err');
         throw new Error('aborted');
       }
       const n = Math.min(chunk, count - off);
       const data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
-      if (!data) {
-        this.logger.log('  ' + label + ': Read Block failed at offset ' + off + ' — stopping; ' + off + '/' + count + ' bytes captured (rest zero-filled).', 'err');
+      if (data) {
+        out.set(data, off);
+        off += n;
+        // Keep the chunk at the size that just worked (do NOT jump back to maxChunk): near a region
+        // border that would re-trigger the reject → backoff cycle for every byte (a ping-pong).
+        chunk = Math.min(chunk, count - off) || chunk;
+        const el = (Date.now() - t0) / 1000;
+        this.onProgress?.({ label, done: off, total: count, elapsedS: el });
+        if (off - lastLoggedAt >= 512 || off === count) {
+          this.logger.log('  ' + label + ': ' + off + '/' + count + ' bytes (' + Math.round((off / count) * 100) + '%), ' + el.toFixed(0) + 's', 'mut');
+          lastLoggedAt = off;
+        }
+      } else if (n > 1) {
+        // Read Block was rejected — a Memory-region border is within this block. Halve and retry
+        // from the SAME offset to read up to (but not across) the border, down to a single byte.
+        chunk = n >> 1;
+      } else {
+        // Even a 1-byte block is rejected here: this region's readable content ends at `off`.
+        // For a Memory region shorter than its max window this is expected, not an error.
         break;
       }
-      out.set(data, off);
-      done = off + n;
-      const pct = Math.round((done / count) * 100);
-      const el = (Date.now() - t0) / 1000;
-      this.logger.log('  ' + label + ': ' + done + '/' + count + ' bytes (' + pct + '%), ' + el.toFixed(0) + 's elapsed', 'mut');
-      this.onProgress?.({ label, done, total: count, elapsedS: el });
     }
-    // Only claim success if the whole region actually came back — a green "read via Read Block"
-    // after an early break (the ES10, which rejects Read Block) would falsely imply a good dump.
-    if (done === count) {
-      this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block (' + chunk + '-byte chunks).', 'ok');
+    if (off === count) {
+      this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
+    } else if (off > 0) {
+      this.logger.log('  ' + label + ': read ' + off + '/' + count + ' bytes via Read Block (region ends before its max window; rest zero-filled).', 'ok');
     } else {
-      this.logger.log('  ' + label + ': INCOMPLETE — ' + done + '/' + count + ' bytes via Read Block; the rest is zero-filled.', 'err');
+      this.logger.log('  ' + label + ': INCOMPLETE — Read Block rejected at the region start (0/' + count + '); zero-filled.', 'err');
     }
     return out;
   }
@@ -366,24 +379,38 @@ export class Connection {
       await this.recover();
       return null;
     }
-    const data = await this.xport.read(count, 12000);
-    if (data.length < count) {
-      // The observed ES10 failure: 06 (pre-parse ACK) THEN 15 03 in the data stream.
-      if (data.length >= 2 && data[0] === OP.NOK) {
-        this.logger.log('  ' + label + ' → 06 then NOK 15 ' + data[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(data[1]), 'err');
-      } else {
-        this.logger.log('  ' + label + ' → short read ' + data.length + '/' + count + ': ' + hex(data.slice(0, 24)), 'err');
-      }
+    // Body is either `count` data bytes + 1 XOR, OR a post-ACK rejection `15 <code>` (2 bytes, no
+    // XOR). Read the first 2 bytes FAST so a rejection is caught in 2 bytes — not by waiting the full
+    // (possibly 512-byte) timeout for data that will never arrive. This also fixes the count≤2 case,
+    // where `15 03` exactly fills `count` data bytes and used to be mistaken for real data.
+    const head = await this.xport.read(Math.min(2, count + 1), 2000);
+    if (head.length >= 2 && head[0] === OP.NOK && head[1] >= 0x01 && head[1] <= 0x07) {
+      this.logger.log('  ' + label + ' → 06 then NOK 15 ' + head[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(head[1]), 'err');
       await this.recover();
       return null;
     }
-    const cs = await this.xport.read(1, 1500);
+    const need = count + 1 - head.length; // remaining data + the 1 XOR byte
+    const rest = need > 0 ? await this.xport.read(need, 12000) : new Uint8Array(0);
+    const body = new Uint8Array(head.length + rest.length);
+    body.set(head);
+    body.set(rest, head.length);
+    if (body.length < count + 1) {
+      this.logger.log('  ' + label + ' → short read ' + body.length + '/' + (count + 1) + ': ' + hex(body.slice(0, 24)), 'err');
+      await this.recover();
+      return null;
+    }
+    const data = body.slice(0, count);
+    const cs = body[count];
     let x = 0;
     for (const d of data) x ^= d;
-    const ok = cs.length > 0 && cs[0] === x;
-    this.logger.log('  ' + label + ' → OK, ' + data.length + ' bytes, XOR ' + (ok ? 'valid' : 'MISMATCH (got ' + hex(cs) + ', want 0x' + x.toString(16) + ')'), ok ? 'ok' : 'err');
+    const ok = cs === x;
+    this.logger.log('  ' + label + ' → OK, ' + count + ' bytes, XOR ' + (ok ? 'valid' : 'MISMATCH (got 0x' + cs.toString(16) + ', want 0x' + x.toString(16) + ')'), ok ? 'ok' : 'err');
     await this.xport.read(4096, 60);
-    return ok ? data : null;
+    if (!ok) {
+      await this.recover();
+      return null;
+    }
+    return data;
   }
 
   /** Operating mode: `55 17 17 AA` → `06 <mode>`. Returns the mode byte; logs the meaning. */

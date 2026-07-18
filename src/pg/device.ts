@@ -52,16 +52,28 @@ const MAP_LEGACY: ProgramMap = {
   decode: 'legacy2460',
 };
 
-// 0BA6 (LSC Logo6.getMemories): ProgOffsetTabelle 0x2FAA, Anchors 0x31CA, Program 0x3292;
-// getNumberOfUploadTransferBytes = 13464. These are read as BARE 4-byte addresses (0x0000____),
-// NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in getAdress() (constants.ts), which the
-// symbolic register reads (flag/magic/protection) use — but the program/offset-table/wiring are
-// Memory objects read via Memory.upload → readByteArray(rawBase), which never calls getAdress. So
-// these bases are deliberately literal bare values here (NOT getAdress'd — that is the whole point:
-// 0x3292 is ≥ 0x1F00 yet must stay bare). One contiguous read from the offset table captures the
-// whole image.
+// 0BA6 (LSC Logo6.getMemories): the upload image is EIGHT separate Memory objects, each read on its
+// own — Read Block (0x05) rejects a read that crosses a Memory-region border (illegal access 0x03,
+// "read across the border"), so we must read each region separately, NOT one contiguous 13464-byte
+// span. The bases below are the getMemories bases; each len is the gap to the next base (its MAX
+// size). Each region's true content may be shorter (getMaxResource-based), so readRegionViaBlock
+// backs the chunk off at the border and stops when even a tiny block is rejected.
+//
+// These are BARE 4-byte addresses (0x0000____), NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in
+// getAdress() (constants.ts), used only for symbolic register reads. Memory reads
+// (Memory.upload → readByteArray(rawBase)) never call getAdress, so 0x3292 stays bare even though
+// it is ≥ 0x1F00. The bases sum contiguously to 13464 = getNumberOfUploadTransferBytes.
 const MAP_0BA6: ProgramMap = {
-  regions: [{ base: 0x00002faa, len: 13464, name: 'program image (offset table + wiring + program)' }],
+  regions: [
+    { base: 0x00002faa, len: 544, name: 'offset table' }, // → 0x31CA
+    { base: 0x000031ca, len: 40, name: 'anchors Q' }, // → 0x31F2
+    { base: 0x000031f2, len: 60, name: 'markers M' }, // → 0x322E
+    { base: 0x0000322e, len: 20, name: 'analog anchors' }, // → 0x3242
+    { base: 0x00003242, len: 40, name: 'virtual anchors' }, // → 0x326A
+    { base: 0x0000326a, len: 20, name: 'reserved' }, // → 0x327E
+    { base: 0x0000327e, len: 20, name: 'special markers' }, // → 0x3292
+    { base: 0x00003292, len: 12720, name: 'program body' }, // → 0x6442 (end of the 13464-byte image)
+  ],
   programBase: 0x00003292,
   readMode: 'block', // the program region only answers Read Block (0x05), not Read Byte — verified on ES10
   decode: 'raw',

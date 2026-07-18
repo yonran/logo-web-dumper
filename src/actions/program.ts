@@ -34,12 +34,27 @@ export async function readAllAndDecode(app: App): Promise<void> {
   const est = mem.readMode === 'block' ? Math.round(total / 900) : Math.round(total / 30);
   app.log('Reading the program image for ' + conn.deviceName + ' (' + total + ' bytes via ' + via + ', ~' + est + 's)…', 'mut');
   app.log('Press “Abort” to stop.', 'mut');
-  const parts: Uint8Array[] = [];
-  for (const r of mem.regions) {
-    parts.push(mem.readMode === 'block' ? await conn.readRegionViaBlock(r.base, r.len, r.name) : await conn.readRegion(r.base, r.len, r.name));
-  }
   const full = new Uint8Array(total);
-  for (let i = 0, o = 0; i < parts.length; o += parts[i].length, i++) full.set(parts[i], o);
+  if (mem.readMode === 'block') {
+    // Block mode (0BA6): read each Memory region SEPARATELY (Read Block cannot cross a region
+    // border) and place it at its address offset. Read the big program-BODY region FIRST — it reads
+    // cleanly, whereas the small metadata regions back off at their borders (a few Restarts each);
+    // reading the body first banks it before any of that churn can disturb the session.
+    const minBase = Math.min(...mem.regions.map((r) => r.base));
+    const order = [...mem.regions].sort((a, b) => b.len - a.len);
+    for (const r of order) {
+      const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
+      full.set(data, (r.base - minBase) >>> 0);
+    }
+  } else {
+    // Byte mode (legacy 0BA4/0BA5): the artificial 2460-byte combined layout, read in order.
+    let o = 0;
+    for (const r of mem.regions) {
+      const data = await conn.readRegion(r.base, r.len, r.name);
+      full.set(data, o);
+      o += data.length;
+    }
+  }
   // Classify suspicious captures, but save them: uniform data is useful diagnostic evidence.
   let nz = 0;
   let nff = 0;

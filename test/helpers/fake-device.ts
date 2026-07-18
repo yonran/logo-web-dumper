@@ -30,6 +30,9 @@ export interface FakeDeviceConfig {
   leaksCleartext?: boolean; // is the password store at 0x0566 readable? default false (ES10 hides it)
   clearWriteUnlocks?: boolean; // does writing 0x4800=0 then expose program memory? default false
   blockReadsWork?: boolean; // does Read Block 0x05 succeed? default false (ES10 rejects)
+  // When set, a Read Block whose range touches ANY unmapped address is rejected 06 15 03 (illegal
+  // access 0x03, "read across the border"), like the real ES10 reading past a Memory region's end.
+  blockRejectUnmapped?: boolean;
   password?: string; // stored cleartext (≤10 chars)
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
@@ -209,6 +212,17 @@ export class FakeDevice implements Transport {
       }
       const a = this.addr(cmd);
       const count = (cmd[1 + w] << 8) | cmd[2 + w];
+      // Reading past a Memory region's end (into unmapped space) is illegal access (0x03), latching.
+      if (this.cfg.blockRejectUnmapped) {
+        for (let i = 0; i < count; i++) {
+          const x = (a + i) >>> 0;
+          if (!this.sys.has(x) && !this.pwdMem.has(x) && !this.progMem.has(x)) {
+            this.latched = true;
+            this.push(0x06, 0x15, 0x03);
+            return;
+          }
+        }
+      }
       const data: number[] = [];
       for (let i = 0; i < count; i++) data.push(this.readMem((a + i) >>> 0));
       let xor = 0;
