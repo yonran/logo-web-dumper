@@ -50,25 +50,27 @@ const MAP_LEGACY: ProgramMap = {
   decode: 'legacy2460',
 };
 
-// 0BA6 (LSC Logo6.getMemories): the upload image is EIGHT separate Memory objects, each read on its
-// own — Read Block (0x05) rejects a read that crosses a Memory-region border (illegal access 0x03),
-// so we read each declared region separately, never one contiguous 13464-byte span. LSC obtains
-// dynamic resource lengths from getMaxResource; these capacities are the known address spans. A
-// rejection aborts the capture because probing past a boundary would restart and lose an unlock.
+// Exact LSC V8 Logo6 upload map. getMemories() has 11 top-level Memory objects; MessageMemoryRTF
+// expands into seven wire reads, for 17 exact ranges in declaration order. getMaxResource is a
+// static maxValues lookup: blocks=200 (index 0), program units=3800 (14), block names=100 (15).
+// Memory.upload reads size×blockSize bytes. The address gaps are never transferred.
 //
 // These are BARE 4-byte addresses (0x0000____), NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in
 // getAdress() (constants.ts), used only for symbolic register reads. Memory reads
 // (Memory.upload → readByteArray(rawBase)) never call getAdress, so 0x3292 stays bare even though
-// it is ≥ 0x1F00. Each region's EXACT byte length is count×width from getMemories + maxValues[]:
-//   offset table  Memory16(getMaxResource(0)+10=210, width 2)          → 420
-//   anchors/markers AnchorMemory16(count, width 20)                     → count×20 (2→40, 3→60, 1→20)
-//   program body  ProgramMemory16(getMaxResource(14)=3800, width 1)     → 3800
-// Reading a region at its EXACT length (never overshooting into the gap before the next region, and
-// never past the program's real end) is what avoids the "read across the border" 0x03 that latches
-// and re-locks the session. Read Block is also capped by the ES10 firmware at a small telegram size,
-// so readRegionViaBlock chunks small.
+// it is ≥ 0x1F00. The ranges transfer 12797 bytes and occupy the address span 0x0688..0x416A.
 const MAP_0BA6: ProgramMap = {
   regions: [
+    { base: 0x00000688, len: 100, name: 'block-name table' }, // Memory(maxValues[15], 1)
+    { base: 0x00000708, len: 800, name: 'block names' }, // Memory(maxValues[15], 8)
+    // MessageMemoryRTF sub-memories (unused address capacity between them is deliberately skipped).
+    { base: 0x00000aa8, len: 6, name: 'message character sets' },
+    { base: 0x00000aae, len: 100, name: 'message offset table' },
+    { base: 0x00000b2e, len: 6400, name: 'message text' }, // MessageMemory8(200, 32)
+    { base: 0x00002b36, len: 50, name: 'message info' },
+    { base: 0x00002b76, len: 25, name: 'message ticker flags' },
+    { base: 0x00002c16, len: 256, name: 'message bar graphs' }, // Memory(32, 8)
+    { base: 0x00002d2a, len: 640, name: 'message I/O names' }, // Memory(40, 16)
     { base: 0x00002faa, len: 420, name: 'offset table' }, // Memory16 210×2
     { base: 0x000031ca, len: 40, name: 'anchors Q' }, // AnchorMemory16 2×20
     { base: 0x000031f2, len: 60, name: 'markers M' }, // 3×20

@@ -300,8 +300,8 @@ export class Connection {
 
   /**
    * Region read via Read Block, in chunks. The 0BA6 program region is block-read-only (Read Byte
-   * returns 0x00), so this is the real dump path for it. A rejected block latches the session, so on
-   * failure we stop and return what we have (zero-filled tail) rather than risk churning recovery.
+   * returns 0x00), so this is the real dump path for it. Every declared range has its exact LSC
+   * length; any rejection is therefore a genuine failure and aborts the capture after recovery.
    * Honours `abort`.
    */
   async readRegionViaBlock(addr: number, count: number, label: string, maxChunk = 16): Promise<Uint8Array> {
@@ -316,19 +316,7 @@ export class Connection {
         throw new Error('aborted');
       }
       const n = Math.min(maxChunk, count - off);
-      let data: Uint8Array;
-      try {
-        // recoverOnReject=false: an illegal-access here means we ran past this region's real content.
-        // The Restart inside recover() RE-LOCKS the just-unlocked program on the ES10, so we must NOT
-        // recover — we simply stop this region with what we captured and leave the session as-is.
-        data = await this.readBlock((addr + off) >>> 0, n, label + ' block', false);
-      } catch (e) {
-        // Illegal access (0x03) = content boundary (or the firmware's max block size). Stop here and
-        // keep what we read; the tail is the inter-region gap, legitimately empty. Any OTHER failure
-        // (transient after retries, XOR, unexpected) propagates — a genuine failure must abort.
-        if (e instanceof PgError && e.nok === 0x03) break;
-        throw e;
-      }
+      const data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
       out.set(data, off);
       off += n;
       const el = (Date.now() - t0) / 1000;
@@ -338,13 +326,7 @@ export class Connection {
         lastLoggedAt = off;
       }
     }
-    if (off === count) {
-      this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
-    } else if (off > 0) {
-      this.logger.log('  ' + label + ': read ' + off + '/' + count + ' bytes via Read Block (region content ends here; rest zero-filled).', 'ok');
-    } else {
-      this.logger.log('  ' + label + ': no readable content (Read Block rejected at the region start).', 'err');
-    }
+    this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
     return out;
   }
 
@@ -355,11 +337,11 @@ export class Connection {
    * `0x00FF0EE8`, i.e. ILLEGAL ACCESS to an unmapped region, not "block reads unsupported". Returns
    * only checksum-verified complete data; exceptions are typed and transient failures are retried.
    */
-  async readBlock(addr: number, count: number, label = 'Read Block', recoverOnReject = true): Promise<Uint8Array> {
+  async readBlock(addr: number, count: number, label = 'Read Block'): Promise<Uint8Array> {
     if (!Number.isInteger(count) || count <= 0 || count > 0xffff) throw new RangeError('Read Block count must be 1..65535');
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.readBlockOnce(addr, count, label, recoverOnReject);
+        return await this.readBlockOnce(addr, count, label);
       } catch (e) {
         if (e instanceof PgError) throw e;
         if (this.abort || attempt >= Connection.RETRIES) throw e;
@@ -368,7 +350,7 @@ export class Connection {
     }
   }
 
-  private async readBlockOnce(addr: number, count: number, label: string, recoverOnReject = true): Promise<Uint8Array> {
+  private async readBlockOnce(addr: number, count: number, label: string): Promise<Uint8Array> {
     const cmd = new Uint8Array([OP.READ_BLOCK, ...encodeAddr(this.device, addr), (count >> 8) & 0xff, count & 0xff]);
     await this.xport.read(4096, 60);
     await this.xport.write(cmd);
@@ -380,7 +362,7 @@ export class Connection {
     if (t0[0] === OP.NOK) {
       const e = await this.xport.read(1, 900);
       this.logger.log('  ' + label + ' rejected: NOK 15 ' + hex(e) + (e.length ? '  ' + cpuErrText(e[0]) : ''), 'err');
-      if (recoverOnReject) await this.recover();
+      await this.recover();
       throw new PgError(label + ' rejected — ' + (e.length ? cpuErrText(e[0]) : 'missing exception code'), e.length ? e[0] : undefined);
     }
     if (t0[0] !== OP.ACK) {
@@ -394,7 +376,7 @@ export class Connection {
     const prefix = await this.xport.read(Math.min(3, count + 1), 2000);
     if (prefix.length === 2 && prefix[0] === OP.NOK && prefix[1] >= 0x01 && prefix[1] <= 0x07) {
       this.logger.log('  ' + label + ' → 06 then NOK 15 ' + prefix[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(prefix[1]), 'err');
-      if (recoverOnReject) await this.recover();
+      await this.recover();
       throw new PgError(label + ' rejected — ' + cpuErrText(prefix[1]), prefix[1]);
     }
     const remainder = count + 1 - prefix.length;

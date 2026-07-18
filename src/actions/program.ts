@@ -36,14 +36,12 @@ export async function readAllAndDecode(app: App): Promise<void> {
   app.log('Press “Abort” to stop.', 'mut');
   let full: Uint8Array;
   if (mem.readMode === 'block') {
-    // Block mode (0BA6): read every Memory region SEPARATELY at its EXACT length (Read Block cannot
-    // cross a region border, and reading past a region's real content latches → re-locks). Place
-    // each at its address offset; the image spans minBase … max(base+len) (regions have gaps). Read
-    // the big program-BODY region FIRST so it is banked even if a later region ends early.
+    // Reproduce Logo6.uploadBlocks: all exact Memory ranges in getMemories declaration order.
+    // Preserve their raw address offsets in the saved image; gaps are zero and never transferred.
     const minBase = Math.min(...mem.regions.map((r) => r.base));
     const span = Math.max(...mem.regions.map((r) => r.base + r.len)) - minBase;
     full = new Uint8Array(span);
-    for (const r of [...mem.regions].sort((a, b) => b.len - a.len)) {
+    for (const r of mem.regions) {
       const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
       full.set(data.subarray(0, r.len), (r.base - minBase) >>> 0);
     }
