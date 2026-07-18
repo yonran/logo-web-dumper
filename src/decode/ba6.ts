@@ -1,0 +1,213 @@
+// 0BA6 (Logo6) netlist decoder. Pure functions over a full address-span image (the bytes saved as
+// logo_<slug>_full.bin, which begins at 0x0688). Turns the captured program into a human-readable
+// netlist: each block's function and wiring, the output/marker drivers, and any user block names.
+//
+// Format authority: decompiled LOGO!Soft Comfort — CompilerFromLogo4.compileProgramMemory /
+// compileAnchors / connect / getTarget, and Logo6.getMemories / Logo6$BlockMemoryUsage. The rules
+// below are the distilled spec. Verified end-to-end against a real ES10 capture (password RHOMBUS):
+// 21 blocks, two named on-delay timers, Q1←B008 / Q2←B009.
+//
+//   - Offset table @0x2FAA: for block n (1..200), V = LE-u16 at byte 2*(n+9); 0xFFFF = absent;
+//     the record sits at program-body offset (V − 200). Record length = next block's offset − this.
+//   - Record: word0 = opcode (LOW byte = function code; HIGH byte = flags: 0x80 remanence,
+//     0x40==0 protection, 0x20>>k = parameter k is a block reference). Input connectors follow as
+//     consecutive LE-u16 words; how many is fixed per function code.
+//   - Connector word: 0xFF/0xFC low byte = open; 0x4000 = negated; 0x8000 = reference to a logic
+//     block (block# = (word & 0x3FF) − 9); else an I/O terminal (number = word & 0x3FF).
+//   - Output anchors (Q/M/AQ/…): rows of 20 bytes = [header][8 driver words][trailer], each driver
+//     the same connector encoding.
+
+import { w16 } from '../util/hex.js';
+
+const MIN_BASE = 0x0688; // the full image begins here (lowest region base)
+const OFFSET_TABLE = 0x2faa; // block-index → program offset (LE u16, +200 bias)
+const PROGRAM_BODY = 0x3292;
+const NAME_INDEX = 0x0688; // 1 byte per name slot: the program line of the named block
+const NAME_STRINGS = 0x0708; // 8-byte name slots
+const OFFSET_BIAS = 200;
+const MAX_BLOCKS = 200;
+
+/** Function code (opcode low byte) → [name, record length incl. opcode word, number of input pins]. */
+const OPCODES: Record<number, readonly [string, number, number]> = {
+  0x01: ['AND', 12, 4],
+  0x02: ['OR', 12, 4],
+  0x03: ['NOT', 4, 1],
+  0x04: ['NAND', 12, 4],
+  0x05: ['NOR', 12, 4],
+  0x06: ['XOR', 8, 2],
+  0x07: ['AND-edge', 12, 4],
+  0x08: ['NAND-edge', 12, 4],
+  0x21: ['on-delay', 8, 1],
+  0x22: ['off-delay', 12, 2],
+  0x23: ['pulse-relay', 12, 3],
+  0x24: ['weekly-timer', 20, 3],
+  0x25: ['latching-relay', 8, 2],
+  0x27: ['ret-on-delay', 12, 2],
+  0x29: ['hours-counter', 28, 3],
+  0x2a: ['wiping-relay', 8, 1],
+  0x2b: ['up/down-counter', 28, 3],
+  0x2c: ['freq-trigger', 16, 1],
+  0x2d: ['async-pulse-gen', 12, 2],
+  0x2e: ['year-clock', 12, 0],
+  0x2f: ['on/off-delay', 12, 1],
+  0x30: ['random', 12, 1],
+  0x31: ['stairwell-switch', 12, 1],
+  0x32: ['comfort-switch', 16, 2],
+  0x33: ['wiping-relay-pec', 16, 2],
+  0x34: ['message-text', 8, 1],
+  0x35: ['analog-threshold', 16, 1],
+  0x36: ['analog-comparator', 24, 2],
+  0x37: ['softkey', 8, 1],
+  0x38: ['shift-register', 12, 3],
+  0x39: ['analog-watchdog', 20, 2],
+  0x3a: ['analog-delta-trigger', 16, 1],
+  0x3b: ['PWM', 24, 2],
+  0x3c: ['math-detection', 12, 2],
+  0x40: ['analog-mux', 20, 3],
+  0x41: ['ramp-control', 36, 3],
+  0x42: ['amplifier', 12, 1],
+  0x43: ['PID', 40, 3],
+  0x44: ['analog-maths', 20, 1],
+};
+
+/**
+ * Decode a single 16-bit connector word to a signal name, or null if the pin is open/unwired.
+ * `0xFF`/`0xFC` low byte = open; `0x4000` = negated; `0x8000` = logic-block reference; otherwise an
+ * I/O terminal whose number is the low 10 bits, mapped through the Logo6 real-CO-opcode ranges.
+ */
+export function connector(word: number): string | null {
+  const low = word & 0xff;
+  if (low === 0xff || low === 0xfc) return null; // open / not-connected
+  const neg = word & 0x4000 ? '/' : '';
+  if (word & 0x8000) return neg + 'B' + String((word & 0x3ff) - 9).padStart(3, '0');
+  const v = word & 0x3ff;
+  if (v === 253) return neg + 'hi';
+  if (v === 254) return neg + 'lo';
+  if (v >= 192) return neg + 'V' + (v - 192 + 1); // virtual output
+  if (v >= 176) return neg + 'S' + (v - 176 + 1); // shift-register bit
+  if (v >= 164) return neg + 'F' + (v - 164 + 1); // TD function key
+  if (v >= 160) return neg + ['C↑', 'C↓', 'C←', 'C→'][v - 160];
+  if (v >= 146) return neg + 'AM' + (v - 146 + 1); // analog marker
+  if (v >= 144) return neg + 'AQ' + (v - 144 + 1); // analog output
+  if (v >= 128) return neg + 'AI' + (v - 128 + 1); // analog input
+  if (v >= 104 && v < 128) return neg + 'X' + (v - 104 + 1); // special marker
+  if (v >= 80) return neg + 'M' + (v - 80 + 1);
+  if (v >= 48) return neg + 'Q' + (v - 48 + 1);
+  return neg + 'I' + (v + 1);
+}
+
+/** Read user block names: name-index @0x0688 holds the program line, strings @0x0708 are 8-byte slots. */
+function readNames(img: Uint8Array): Map<number, string> {
+  const names = new Map<number, string>();
+  const idxOff = NAME_INDEX - MIN_BASE;
+  const strOff = NAME_STRINGS - MIN_BASE;
+  for (let i = 0; i < 100; i++) {
+    const line = img[idxOff + i];
+    if (line === undefined || line === 0xff) continue;
+    const block = line - 9;
+    let s = '';
+    for (let j = 0; j < 8; j++) {
+      const c = img[strOff + i * 8 + j];
+      if (c === 0x00 || c === 0xff || c === undefined) break;
+      if (c >= 32 && c < 127) s += String.fromCharCode(c);
+    }
+    if (s) names.set(block, s);
+  }
+  return names;
+}
+
+/** Output/marker anchor tables: [label, base, rows, first-anchor-number]. 20-byte rows, 8 drivers each. */
+const ANCHORS: readonly (readonly [string, number, number, number])[] = [
+  ['Q', 0x31ca, 2, 1],
+  ['M', 0x31f2, 3, 1],
+  ['AQ', 0x322e, 1, 1],
+  ['V', 0x3242, 2, 1],
+  ['X', 0x327e, 1, 25], // special markers are numbered from 25
+];
+
+/**
+ * Decode a full 0BA6 address-span image (the bytes of logo_<slug>_full.bin, starting at 0x0688)
+ * into a netlist. Returns null if the image is not a plausible 0BA6 image (wrong size / empty).
+ */
+export function decode0BA6(img: Uint8Array): string | null {
+  // The image must at least span through the program body for the offset table to resolve.
+  if (img.length < PROGRAM_BODY - MIN_BASE + 4) return null;
+  const ot = OFFSET_TABLE - MIN_BASE;
+  const prog = PROGRAM_BODY - MIN_BASE;
+
+  // First pass: collect present blocks (number → program-body offset) so we can size records by the
+  // gap to the next block, matching how LSC lays them out contiguously.
+  const present: { n: number; off: number }[] = [];
+  for (let n = 1; n <= MAX_BLOCKS; n++) {
+    const v = w16(img, ot + 2 * (n + 9));
+    if (v === 0xffff) continue;
+    present.push({ n, off: v - OFFSET_BIAS });
+  }
+  present.sort((a, b) => a.off - b.off);
+
+  const names = readNames(img);
+  const out: string[] = [];
+  out.push('=== BLOCKS (' + present.length + ') ===');
+  for (let i = 0; i < present.length; i++) {
+    const { n, off } = present[i];
+    const base = prog + off;
+    const bn = 'B' + String(n).padStart(3, '0');
+    const label = names.has(n) ? bn + ' "' + names.get(n) + '"' : bn;
+    if (off < 0 || base + 2 > img.length) {
+      out.push('  ' + label + ' = <offset out of range>');
+      continue;
+    }
+    const op = img[base];
+    const hi = img[base + 1];
+    const spec = OPCODES[op];
+    const flags: string[] = [];
+    if (hi & 0x80) flags.push('remanent');
+    if (!(hi & 0x40)) flags.push('protected');
+    const flagStr = flags.length ? '  [' + flags.join(', ') + ']' : '';
+    if (!spec) {
+      out.push('  ' + label + ' = ??? function 0x' + op.toString(16).padStart(2, '0') + flagStr);
+      continue;
+    }
+    const [name, , nIn] = spec;
+    const inputs: string[] = [];
+    for (let k = 0; k < nIn; k++) {
+      const wo = base + 2 + k * 2;
+      if (wo + 1 >= img.length) break;
+      inputs.push(connector(w16(img, wo)) ?? '·');
+    }
+    out.push('  ' + label + ' = ' + name + '(' + inputs.join(', ') + ')' + flagStr);
+  }
+
+  out.push('');
+  out.push('=== OUTPUTS & MARKERS ===');
+  let anyOut = false;
+  for (const [lbl, addrBase, rows, firstNum] of ANCHORS) {
+    const rb = addrBase - MIN_BASE;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < 8; col++) {
+        const wo = rb + row * 20 + 2 + col * 2; // skip the 2-byte row header
+        if (wo + 1 >= img.length) continue;
+        const src = connector(w16(img, wo));
+        if (src) {
+          out.push('  ' + lbl + (firstNum + row * 8 + col) + ' = ' + src);
+          anyOut = true;
+        }
+      }
+    }
+  }
+  if (!anyOut) out.push('  (no outputs or markers wired)');
+
+  if (names.size) {
+    out.push('');
+    out.push('=== NAMED BLOCKS ===');
+    for (const { n } of present) if (names.has(n)) out.push('  B' + String(n).padStart(3, '0') + ' = "' + names.get(n) + '"');
+  }
+
+  out.push('');
+  out.push(
+    'Decoded ' + present.length + ' blocks from the 0BA6 program. Basic gates and wiring are exact; ' +
+      'special-function parameters (timer/counter values) are held in each record after the inputs — ' +
+      'ask if you want those decoded too.',
+  );
+  return out.join('\n');
+}

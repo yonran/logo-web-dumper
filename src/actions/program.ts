@@ -4,6 +4,7 @@ import type { App } from '../app.js';
 import type { Connection } from '../pg/connection.js';
 import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { decodeCombined } from '../decode/program.js';
+import { decode0BA6 } from '../decode/ba6.js';
 import { confirmStoppedInCurrentSession, deviceSlug, ensureStopped } from './common.js';
 
 /**
@@ -79,11 +80,19 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
   const nz = full.reduce((n, b) => n + (b ? 1 : 0), 0);
   const fname = 'logo_' + slug + '_full.bin';
   app.ui.download(fname, full);
-  app.ui.setNetlist(
-    '✅ Complete LSC image captured: ' + full.length + ' address-span bytes (' + nz + ' non-zero). Unpopulated message-text slots were skipped exactly as LSC skips them.\n' +
-      'Saved ' + fname + '. No 0BA6 netlist decoder yet — the .bin holds the raw device bytes for offline analysis.',
-  );
-  app.log('Saved complete LSC image ' + fname + ' (' + nz + ' non-zero).', 'ok');
+  const netlist = decode0BA6(full);
+  if (netlist) {
+    app.ui.setNetlist(
+      '✅ Complete LSC image captured: ' + full.length + ' address-span bytes (' + nz + ' non-zero), saved ' + fname + '.\n\n' + netlist,
+    );
+    app.log('Decoded the 0BA6 program to a netlist. Saved complete image ' + fname + ' (' + nz + ' non-zero).', 'ok');
+  } else {
+    app.ui.setNetlist(
+      '✅ Complete LSC image captured: ' + full.length + ' address-span bytes (' + nz + ' non-zero). Unpopulated message-text slots were skipped exactly as LSC skips them.\n' +
+        'Saved ' + fname + ', but it could not be decoded to a netlist (unexpected size/contents) — the .bin holds the raw device bytes.',
+    );
+    app.log('Saved complete LSC image ' + fname + ' (' + nz + ' non-zero); netlist decode declined the image.', 'ok');
+  }
 }
 
 /**
@@ -177,13 +186,22 @@ export async function readAllAndDecode(app: App): Promise<void> {
   }
 }
 
-/** Decode a saved combined dump (.bin) offline. Only the legacy 2460-byte 0BA4/0BA5 layout decodes. */
+/**
+ * Decode a saved dump (.bin) offline. The legacy 2460-byte 0BA4/0BA5 combined layout and the
+ * 15074-byte 0BA6 full address-span image (logo_<slug>_full.bin) both decode to a netlist.
+ */
 export function decodeFile(app: App, bytes: Uint8Array, name: string): void {
   if (bytes.length === 2460) {
     app.ui.setNetlist(decodeCombined(bytes));
-    app.log('Decoded ' + name + '.', 'ok');
+    app.log('Decoded ' + name + ' (legacy 0BA4/0BA5 layout).', 'ok');
     return;
   }
-  app.ui.setNetlist('(' + name + ': ' + bytes.length + ' bytes — not the legacy 2460-byte layout, so it cannot be decoded to a netlist yet.)');
-  app.log('File is ' + bytes.length + ' bytes. Only the legacy 2460-byte 0BA4/0BA5 dump can be decoded offline yet; 0BA6 raw images are captured but not decoded.', 'err');
+  const netlist = decode0BA6(bytes);
+  if (netlist) {
+    app.ui.setNetlist(netlist);
+    app.log('Decoded ' + name + ' (0BA6 image).', 'ok');
+    return;
+  }
+  app.ui.setNetlist('(' + name + ': ' + bytes.length + ' bytes — not a recognised 0BA4/0BA5 (2460-byte) or 0BA6 full-image layout, so it cannot be decoded to a netlist.)');
+  app.log('File is ' + bytes.length + ' bytes — neither the legacy 2460-byte dump nor a 0BA6 full image; not decoded.', 'err');
 }
