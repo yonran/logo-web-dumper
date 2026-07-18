@@ -4,7 +4,7 @@ import type { App } from '../app.js';
 import type { Connection } from '../pg/connection.js';
 import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { decodeCombined } from '../decode/program.js';
-import { decode0BA6 } from '../decode/ba6.js';
+import { decode0BA6, toMermaid } from '../decode/ba6.js';
 import { confirmStoppedInCurrentSession, deviceSlug, ensureStopped } from './common.js';
 
 /**
@@ -94,6 +94,7 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
     app.ui.setNetlist(
       '✅ Complete LSC image captured: ' + full.length + ' address-span bytes (' + nz + ' non-zero), saved ' + fname + '.\n\n' + netlist,
     );
+    app.ui.setDiagram(toMermaid(full));
     app.log('Decoded the 0BA6 program to a netlist. Saved complete image ' + fname + ' (' + nz + ' non-zero).', 'ok');
   } else {
     app.ui.setNetlist(
@@ -110,6 +111,7 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
  * yet unlocked, since that would only yield zeros.
  */
 export async function readAllAndDecode(app: App): Promise<void> {
+  app.ui.setDiagram(null); // cleared here; only a successful 0BA6 decode re-populates it
   // 0BA6 FAST PATH — the block-read window is fragile. Hardware proof: the unlock's 16-byte Read
   // Block at 0x00003292 succeeds, but the very next Read Block fails with NOK 03 after only a mode
   // query (0x55) and a PAGED Read Byte (0x00FF48FF) in between. So on the ES10 a mode query or a
@@ -200,6 +202,7 @@ export async function readAllAndDecode(app: App): Promise<void> {
  * 15074-byte 0BA6 full address-span image (logo_<slug>_full.bin) both decode to a netlist.
  */
 export function decodeFile(app: App, bytes: Uint8Array, name: string): void {
+  app.ui.setDiagram(null); // cleared here; only a successful 0BA6 decode re-populates it
   if (bytes.length === 2460) {
     app.ui.setNetlist(decodeCombined(bytes));
     app.log('Decoded ' + name + ' (legacy 0BA4/0BA5 layout).', 'ok');
@@ -208,6 +211,7 @@ export function decodeFile(app: App, bytes: Uint8Array, name: string): void {
   const netlist = decode0BA6(bytes);
   if (netlist) {
     app.ui.setNetlist(netlist);
+    app.ui.setDiagram(toMermaid(bytes));
     app.log('Decoded ' + name + ' (0BA6 image).', 'ok');
     return;
   }

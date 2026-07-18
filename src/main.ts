@@ -3,16 +3,58 @@
 import { App, type Ui } from './app.js';
 import { Logger } from './log.js';
 import { Store } from './state/store.js';
-import { $, downloadBytes } from './util/dom.js';
+import { $, copyText, downloadBytes } from './util/dom.js';
 import { wireUi } from './ui/controller.js';
 
 const logger = new Logger();
 const store = new Store();
 
+/**
+ * Build a mermaid.live link for a diagram, entirely in the browser: the source is deflated with the
+ * native CompressionStream and packed into the URL FRAGMENT (`#pako:…`). The fragment is never sent
+ * to a server on navigation, so nothing is uploaded — mermaid.live's own JS reads it client-side.
+ * Returns null if CompressionStream is unavailable (older browser); the copy button still works.
+ */
+async function mermaidLiveUrl(code: string): Promise<string | null> {
+  if (typeof CompressionStream === 'undefined') return null;
+  const state = { code, mermaid: '{\n  "theme": "default"\n}', autoSync: true, rough: false, updateDiagram: true };
+  const bytes = new TextEncoder().encode(JSON.stringify(state));
+  const compressed = new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+  let bin = '';
+  for (const b of compressed) bin += String.fromCharCode(b);
+  const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return 'https://mermaid.live/edit#pako:' + b64;
+}
+
+let currentMermaid: string | null = null;
+
 const ui: Ui = {
   input: (id) => $<HTMLInputElement>(`#${id}`).value,
   setNetlist: (t) => {
     $('#netlist').textContent = t;
+  },
+  setDiagram: (mermaid) => {
+    currentMermaid = mermaid;
+    const row = $('#diagramrow');
+    const link = $<HTMLAnchorElement>('#diagramlink');
+    if (!mermaid) {
+      row.hidden = true;
+      link.removeAttribute('href');
+      return;
+    }
+    row.hidden = false; // reveal now; the copy button works immediately, the link resolves async
+    link.textContent = 'Building link…';
+    link.removeAttribute('href');
+    void mermaidLiveUrl(mermaid).then((url) => {
+      if (currentMermaid !== mermaid) return; // a newer decode superseded this one
+      if (url) {
+        link.href = url;
+        link.textContent = 'Open diagram in mermaid.live ↗';
+        link.style.display = '';
+      } else {
+        link.style.display = 'none'; // no CompressionStream — fall back to Copy Mermaid
+      }
+    });
   },
   setStatus: (t, cls) => {
     const el = $('#status');
@@ -45,3 +87,8 @@ const ui: Ui = {
 
 const app = new App(store, logger, ui);
 wireUi(app);
+
+// Copy the Mermaid source to the clipboard (fallback / for pasting into any renderer).
+$('#copymermaid').onclick = () => {
+  if (currentMermaid) void copyText(currentMermaid);
+};

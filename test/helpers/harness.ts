@@ -10,6 +10,8 @@ import { FakeDevice, type FakeDeviceConfig } from './fake-device.js';
 
 export class FakeUi implements Ui {
   netlist = '';
+  /** Last Mermaid source passed to setDiagram (null = diagram controls hidden). */
+  diagram: string | null = null;
   status = '';
   statusCls: LogClass = null;
   inputs: Record<string, string> = {};
@@ -27,6 +29,9 @@ export class FakeUi implements Ui {
   }
   setNetlist(t: string): void {
     this.netlist = t;
+  }
+  setDiagram(mermaid: string | null): void {
+    this.diagram = mermaid;
   }
   setStatus(t: string, cls: LogClass): void {
     this.status = t;

@@ -76,24 +76,32 @@ const OPCODES: Record<number, readonly [string, number, number]> = {
  * I/O terminal whose number is the low 10 bits, mapped through the Logo6 real-CO-opcode ranges.
  */
 export function connector(word: number): string | null {
+  const p = connectorParts(word);
+  return p ? (p.neg ? '/' : '') + p.sig : null;
+}
+
+/** The connector split into its signal name and its inversion flag (null if the pin is open). */
+export function connectorParts(word: number): { sig: string; neg: boolean } | null {
   const low = word & 0xff;
   if (low === 0xff || low === 0xfc) return null; // open / not-connected
-  const neg = word & 0x4000 ? '/' : '';
-  if (word & 0x8000) return neg + 'B' + String((word & 0x3ff) - 9).padStart(3, '0');
+  const neg = !!(word & 0x4000);
+  if (word & 0x8000) return { sig: 'B' + String((word & 0x3ff) - 9).padStart(3, '0'), neg };
   const v = word & 0x3ff;
-  if (v === 253) return neg + 'hi';
-  if (v === 254) return neg + 'lo';
-  if (v >= 192) return neg + 'V' + (v - 192 + 1); // virtual output
-  if (v >= 176) return neg + 'S' + (v - 176 + 1); // shift-register bit
-  if (v >= 164) return neg + 'F' + (v - 164 + 1); // TD function key
-  if (v >= 160) return neg + ['C↑', 'C↓', 'C←', 'C→'][v - 160];
-  if (v >= 146) return neg + 'AM' + (v - 146 + 1); // analog marker
-  if (v >= 144) return neg + 'AQ' + (v - 144 + 1); // analog output
-  if (v >= 128) return neg + 'AI' + (v - 128 + 1); // analog input
-  if (v >= 104 && v < 128) return neg + 'X' + (v - 104 + 1); // special marker
-  if (v >= 80) return neg + 'M' + (v - 80 + 1);
-  if (v >= 48) return neg + 'Q' + (v - 48 + 1);
-  return neg + 'I' + (v + 1);
+  let sig: string;
+  if (v === 253) sig = 'hi';
+  else if (v === 254) sig = 'lo';
+  else if (v >= 192) sig = 'V' + (v - 192 + 1); // virtual output
+  else if (v >= 176) sig = 'S' + (v - 176 + 1); // shift-register bit
+  else if (v >= 164) sig = 'F' + (v - 164 + 1); // TD function key
+  else if (v >= 160) sig = ['C↑', 'C↓', 'C←', 'C→'][v - 160];
+  else if (v >= 146) sig = 'AM' + (v - 146 + 1); // analog marker
+  else if (v >= 144) sig = 'AQ' + (v - 144 + 1); // analog output
+  else if (v >= 128) sig = 'AI' + (v - 128 + 1); // analog input
+  else if (v >= 104 && v < 128) sig = 'X' + (v - 104 + 1); // special marker
+  else if (v >= 80) sig = 'M' + (v - 80 + 1);
+  else if (v >= 48) sig = 'Q' + (v - 48 + 1);
+  else sig = 'I' + (v + 1);
+  return { sig, neg };
 }
 
 /** Basic functions (0x01–0x08) have NO BlockParameter, so LSC never applies the flag bits to them. */
@@ -266,4 +274,99 @@ export function decode0BA6(img: Uint8Array): string | null {
       'Non-timer special-function parameters (counter limits, analog gains) are not decoded yet.',
   );
   return out.join('\n');
+}
+
+/** Mermaid node shape for a block: hexagon for timers, rounded for latches/pulse, rectangle otherwise. */
+function nodeShape(op: number, text: string): string {
+  const q = '"' + text + '"';
+  if (op in TIME_PARAMS) return '{{' + q + '}}';
+  if (op === 0x25 || op === 0x23) return '(' + q + ')';
+  return '[' + q + ']';
+}
+
+/**
+ * Render the decoded 0BA6 program as a Mermaid `flowchart LR`: inputs on the left flowing through
+ * the blocks to the outputs, dotted "NOT" edges for inverted inputs. Returns null for a non-0BA6
+ * image. The output is Mermaid source text — the caller decides how to render/link it.
+ */
+export function toMermaid(img: Uint8Array): string | null {
+  if (img.length < PROGRAM_BODY - MIN_BASE + 4) return null;
+  const ot = OFFSET_TABLE - MIN_BASE;
+  const prog = PROGRAM_BODY - MIN_BASE;
+  const names = readNames(img);
+
+  const present: { n: number; off: number }[] = [];
+  for (let n = 1; n <= MAX_BLOCKS; n++) {
+    const v = w16(img, ot + 2 * (n + 9));
+    if (v !== 0xffff) present.push({ n, off: v - OFFSET_BIAS });
+  }
+  present.sort((a, b) => a.off - b.off);
+
+  const nodeLines: string[] = [];
+  const edges: string[] = [];
+  const inputTerms = new Set<string>(); // I*/AI* terminals referenced as sources
+  const addEdge = (from: string, to: string, neg: boolean): void => {
+    edges.push('  ' + from + (neg ? ' -. NOT .-> ' : ' --> ') + to);
+    if (/^A?I\d+$/.test(from)) inputTerms.add(from);
+  };
+
+  for (const { n, off } of present) {
+    const base = prog + off;
+    if (off < 0 || base + 2 > img.length) continue;
+    const op = img[base];
+    const id = 'B' + String(n).padStart(3, '0');
+    const spec = OPCODES[op];
+    const type = spec ? spec[0] : 'op' + op.toString(16).padStart(2, '0');
+    let text = id;
+    if (names.has(n)) text += " '" + names.get(n) + "'";
+    text += '<br/>' + type;
+    for (const [k, plabel] of (TIME_PARAMS[op] ?? []).entries()) {
+      const wo = base + 2 + (spec ? spec[2] : 0) * 2 + k * 2;
+      if (wo + 1 < img.length) text += ' ' + plabel + '=' + decodeTime(w16(img, wo));
+    }
+    nodeLines.push('  ' + id + nodeShape(op, text));
+    const nIn = spec ? spec[2] : 0;
+    for (let k = 0; k < nIn; k++) {
+      const wo = base + 2 + k * 2;
+      if (wo + 1 >= img.length) break;
+      const p = connectorParts(w16(img, wo));
+      if (p) addEdge(p.sig, id, p.neg);
+    }
+  }
+
+  // Output anchors → their driver.
+  const outNodes: string[] = [];
+  for (const [lbl, addrBase, rows, firstNum] of ANCHORS) {
+    const rb = addrBase - MIN_BASE;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < 8; col++) {
+        const wo = rb + row * 20 + 2 + col * 2;
+        if (wo + 1 >= img.length) continue;
+        const p = connectorParts(w16(img, wo));
+        if (p) {
+          const term = lbl + (firstNum + row * 8 + col);
+          outNodes.push('    ' + term + '(["' + term + '"])');
+          addEdge(p.sig, term, p.neg);
+        }
+      }
+    }
+  }
+
+  if (!nodeLines.length && !outNodes.length) return null;
+
+  const lines = ['flowchart LR'];
+  if (inputTerms.size) {
+    lines.push('  subgraph IN[inputs]');
+    for (const t of [...inputTerms].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })))
+      lines.push('    ' + t + '(["' + t + '"])');
+    lines.push('  end');
+  }
+  lines.push(...nodeLines);
+  if (outNodes.length) {
+    lines.push('  subgraph OUT[outputs]');
+    lines.push(...outNodes);
+    lines.push('  end');
+  }
+  lines.push(...edges);
+  return lines.join('\n');
 }

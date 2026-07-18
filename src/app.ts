@@ -21,6 +21,12 @@ export interface Ui {
   input(id: string): string;
   /** Replace the netlist output panel. */
   setNetlist(text: string): void;
+  /**
+   * Provide the Mermaid diagram source for the decoded program (or `null` to hide the diagram
+   * controls). The UI turns it into an "open in mermaid.live" link and a copy button; the source is
+   * generated locally and nothing is uploaded.
+   */
+  setDiagram(mermaid: string | null): void;
   /** Set the connection status label. */
   setStatus(text: string, cls: LogClass): void;
   /** Show/update the running-operation progress indicator; `null` hides it. */

@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connector, decode0BA6, decodeTime } from '../src/decode/ba6.js';
+import { connector, decode0BA6, decodeTime, toMermaid } from '../src/decode/ba6.js';
 
 test('decodeTime: the four time bases (top 2 bits) and their units', () => {
   assert.equal(decodeTime(0x412c), '3.00s'); // base 01 (seconds), value 300 → 3.00 s (the real capture)
@@ -106,6 +106,24 @@ test('decode0BA6: latching-relay and pulse-relay are never [protected] (plain Bl
 
 test('decode0BA6: declines an image that is too short to hold the program body', () => {
   assert.equal(decode0BA6(new Uint8Array(100)), null);
+});
+
+test('toMermaid: emits a flowchart with nodes, shapes, inverted edges, and outputs', () => {
+  const m = toMermaid(buildImage());
+  assert.ok(m, 'expected mermaid source');
+  assert.match(m, /^flowchart LR/);
+  assert.match(m, /subgraph IN\[inputs\]/);
+  assert.match(m, /I1\(\["I1"\]\)/); // input terminal as a stadium node
+  assert.match(m, /B001\["B001<br\/>AND"\]/); // gate as a rectangle
+  assert.match(m, /B002\{\{"B002 'TMR'<br\/>on-delay T=3\.00s"\}\}/); // timer as a hexagon with its value
+  assert.match(m, /I1 --> B001/); // normal edge
+  assert.match(m, /B002 -\. NOT \.-> B001/); // inverted input as a dotted NOT edge
+  assert.match(m, /subgraph OUT\[outputs\]/);
+  assert.match(m, /B001 --> Q1/); // output driver edge
+});
+
+test('toMermaid: declines a non-0BA6 image', () => {
+  assert.equal(toMermaid(new Uint8Array(100)), null);
 });
 
 test('decode0BA6: an all-0xFF image has no blocks and no wired outputs', () => {
