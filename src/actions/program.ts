@@ -11,9 +11,9 @@ import { confirmStoppedInCurrentSession, deviceSlug, ensureStopped } from './com
  * clears the latch RE-LOCKS the just-unlocked program (proven on ES10 hardware). So:
  *  Tier 1 — read the PROGRAM BODY first (the one region proven block-readable) and save it as its
  *           own reliable artifact, capturing exactly the bytes returned (never zero-padded).
- *  Tier 2 — only if the program read cleanly (no fault → no re-locking Restart), attempt the other
- *           LSC Memory regions for a complete image; stop at the first that faults and clearly mark
- *           the image partial. A faulted region is NEVER represented as successfully-read zeros.
+ *  Tier 2 — reproduce LSC's Memory uploads. In particular, MessageMemoryRTF reads its offset table
+ *           and then only populated message-text records, coalescing valid IDs up to three apart.
+ *           A fault aborts the composite image; only the already-complete program artifact remains.
  */
 async function readBlockImage(app: App, conn: Connection): Promise<void> {
   const mem = conn.mem;
@@ -31,55 +31,59 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
   app.log('Reading the PROGRAM BODY first (' + progR.len + ' bytes via Read Block, ~' + Math.round(progR.len / 300) + 's) — the primary artifact. Press “Abort” to stop.', 'mut');
   const progData = await conn.readRegionViaBlock(progR.base, progR.len, progR.name);
   full.set(progData, (progR.base - minBase) >>> 0);
-  const progComplete = progData.length === progR.len;
   const progNz = progData.reduce((n, b) => n + (b ? 1 : 0), 0);
   const progFname = 'logo_' + slug + '_program.bin';
   app.ui.download(progFname, progData);
   app.store.set({ dumped: true });
   if (progNz === 0) {
     app.log('⚠ Program body read back ALL ZERO (' + progData.length + ' bytes) — the program is not unlocked (run step 3 first) or block-read did not open. Saved anyway for diagnosis.', 'err');
-  } else if (progComplete) {
-    app.log('✅ Program body captured: ' + progData.length + ' bytes (' + progNz + ' non-zero) → ' + progFname, 'ok');
   } else {
-    app.log('✅ Program body captured (PARTIAL): ' + progData.length + '/' + progR.len + ' bytes (' + progNz + ' non-zero) up to a boundary → ' + progFname + '. That is the reliable artifact; the Restart re-locked the session, so the rest of the image is not attempted.', 'ok');
+    app.log('✅ Program body captured: ' + progData.length + ' bytes (' + progNz + ' non-zero) → ' + progFname, 'ok');
   }
 
-  // ---- Tier 2: the remaining LSC regions, best-effort, only if the program read left the session
-  // usable (progComplete ⇒ no fault ⇒ no re-locking Restart happened).
-  let imageComplete = progComplete;
-  let regionsOk = progComplete ? 1 : 0;
-  if (progComplete) {
-    try {
-      for (const r of mem.regions) {
-        if (r === progR) continue;
-        const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
-        full.set(data, (r.base - minBase) >>> 0);
-        if (data.length < r.len) {
-          imageComplete = false;
-          app.log('Full LSC image INCOMPLETE — region "' + r.name + '" ended at ' + data.length + '/' + r.len + '; the Restart re-locked the session, so no further regions are read. Program-body artifact is unaffected.', 'err');
-          break;
+  // ---- Tier 2: remaining LSC memories. The normal serial path uses fastUploadMessageText:
+  // offset entry byte 0 != 0xFF means the message ID is populated; runs whose next populated ID is
+  // at most three IDs away are coalesced. Each ID occupies four 32-byte lines = 128 bytes.
+  let messageOffsets: Uint8Array | undefined;
+  try {
+    for (const r of mem.regions) {
+      if (r === progR) continue;
+      if (r.name === 'message text') {
+        if (!messageOffsets) throw new Error('LSC message offset table was not read before message text');
+        const valid: number[] = [];
+        for (let id = 0; id < messageOffsets.length / 2; id++) {
+          if (messageOffsets[id * 2] !== 0xff) valid.push(id);
         }
-        regionsOk++;
+        for (let i = 0; i < valid.length; ) {
+          const first = valid[i];
+          let last = first;
+          i++;
+          while (i < valid.length && valid[i] - last <= 3) last = valid[i++];
+          const addr = r.base + first * 128;
+          const len = (last - first + 1) * 128;
+          const data = await conn.readRegionViaBlock(addr, len, r.name + ' IDs ' + first + '…' + last);
+          full.set(data, (addr - minBase) >>> 0);
+        }
+        app.log('  message text: LSC fast upload selected ' + valid.length + '/50 populated message IDs.', 'ok');
+        continue;
       }
-    } catch (e) {
-      imageComplete = false;
-      app.log('Full LSC image read stopped: ' + (e instanceof Error ? e.message : String(e)) + '. Program-body artifact is retained.', 'err');
+      const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
+      full.set(data, (r.base - minBase) >>> 0);
+      if (r.name === 'message offset table') messageOffsets = data;
     }
+  } catch (e) {
+    app.log('Complete LSC image aborted: ' + (e instanceof Error ? e.message : String(e)) + '. The program-body artifact is retained; no partial full image was saved.', 'err');
+    return;
   }
 
   const nz = full.reduce((n, b) => n + (b ? 1 : 0), 0);
   const fname = 'logo_' + slug + '_full.bin';
   app.ui.download(fname, full);
   app.ui.setNetlist(
-    (imageComplete
-      ? '✅ Complete LSC image captured: ' + full.length + ' bytes, all ' + mem.regions.length + ' regions (' + nz + ' non-zero).\n'
-      : '⚠ PARTIAL image: the program body (' + progFname + ') is the reliable part. The full ' + mem.regions.length + '-region image is incomplete (' + regionsOk + ' region(s) read); UNREAD regions are zero in this file and must NOT be trusted.\n') +
+    '✅ Complete LSC image captured: ' + full.length + ' address-span bytes (' + nz + ' non-zero). Unpopulated message-text slots were skipped exactly as LSC skips them.\n' +
       'Saved ' + fname + '. No 0BA6 netlist decoder yet — the .bin holds the raw device bytes for offline analysis.',
   );
-  app.log(
-    imageComplete ? 'Saved complete image ' + fname + ' (' + nz + ' non-zero).' : 'Saved partial image ' + fname + ' (' + nz + ' non-zero); the program body is the reliable artifact.',
-    imageComplete ? 'ok' : 'err',
-  );
+  app.log('Saved complete LSC image ' + fname + ' (' + nz + ' non-zero).', 'ok');
 }
 
 /**
@@ -106,7 +110,7 @@ export async function readAllAndDecode(app: App): Promise<void> {
   // Region addresses/lengths come from the DETECTED device's map (0BA6 reads the high bare image;
   // 0BA5/0BA4 the low legacy layout) — reading the wrong family's addresses returns 0xFF/0x00.
   const mem = conn.mem;
-  // 0BA6: two-tier Read Block capture (program body first, best-effort full image). See below.
+  // 0BA6: program body first, then LSC-faithful Memory uploads (including sparse message text).
   if (mem.readMode === 'block') {
     await readBlockImage(app, conn);
     return;

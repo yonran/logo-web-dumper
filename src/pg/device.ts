@@ -50,15 +50,17 @@ const MAP_LEGACY: ProgramMap = {
   decode: 'legacy2460',
 };
 
-// Exact LSC V8 Logo6 upload map. getMemories() has 11 top-level Memory objects; MessageMemoryRTF
-// expands into seven wire reads, for 17 exact ranges in declaration order. getMaxResource is a
+// LSC V8 Logo6 upload map. getMemories() has 11 top-level Memory objects; MessageMemoryRTF
+// expands into seven logical ranges. getMaxResource is a
 // static maxValues lookup: blocks=200 (index 0), program units=3800 (14), block names=100 (15).
 // Memory.upload reads size×blockSize bytes. The address gaps are never transferred.
 //
 // These are BARE 4-byte addresses (0x0000____), NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in
 // getAdress() (constants.ts), used only for symbolic register reads. Memory reads
 // (Memory.upload → readByteArray(rawBase)) never call getAdress, so 0x3292 stays bare even though
-// it is ≥ 0x1F00. The ranges transfer 12797 bytes and occupy the address span 0x0688..0x416A.
+// it is ≥ 0x1F00. Fixed ranges total 6397 bytes. Message text adds 0..6400 bytes dynamically:
+// LSC's fast serial upload reads only populated 128-byte message records. The output address span
+// remains 0x0688..0x416A (15074 bytes).
 const MAP_0BA6: ProgramMap = {
   regions: [
     { base: 0x00000688, len: 100, name: 'block-name table' }, // Memory(maxValues[15], 1)
