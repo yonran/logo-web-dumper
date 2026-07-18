@@ -38,7 +38,9 @@ Convention: `→` = PC→LOGO, `←` = LOGO→PC. All addresses 4-byte big-endia
 - **But the whole 2460-byte program dump was `0xFF`.** Cause: `0x0C14`/`0x0E20`/`0x0EE8` are LSC's
   **`Logo4` (0BA4)** map. The DUT is a 0BA6 (`Logo6`; ES10 = `Logo6Update2`, getID `0x45`, which
   does NOT override `getMemories`). The 0BA6 map is `Logo6.getMemories`: ProgOffsetTabelle `0x2FAA`,
-  Anchors `0x31CA`, Program `0x3292`; total image = **13464 bytes**; block-name tables `0x0688`/`0x0708`/`0x0AA8`.
+  Anchors `0x31CA`, Program `0x3292`; block-name tables begin at `0x0688`/`0x0708`.
+  Correction: **13464 is LSC's nominal progress estimate**. The 17 exact wire ranges total 12797
+  bytes and their address-preserving image spans 15074 bytes (`0x0688…0x416A`).
 
 ### 2026-07-17 (later) — CORRECTIONS: 0BA6 program addrs are BARE; unlock recovers password but NOT program reads
 
@@ -59,7 +61,7 @@ Convention: `→` = PC→LOGO, `←` = LOGO→PC. All addresses 4-byte big-endia
   ES10 the password recovery works (`RHOMBUS`) but the `0x4800` write does **not** open program reads.
 - **Open:** is the program block-read-only (try BARE Read Block `05 00 00 32 92`)? Is the offset table
   at `0x00002FAA` readable while the body is protected? Or does the ES10 firmware simply hold read
-  protection that `0x4800` doesn't defeat? Next hardware run: full bare image `0x00002FAA`/13464.
+  protection that `0x4800` doesn't defeat? Next hardware run: all 17 exact bare Logo6 ranges.
 
 ---
 

@@ -271,15 +271,19 @@ layout. This tool selects the map from the detected IdentNo (see `src/pg/device.
 
 | Region | base | wire | Bytes |
 |---|---|---|---|
-| Program-offset table | `2FAA` | `0x00002FAA` | — |
-| Anchors (Q/M/AM wiring) | `31CA` | `0x000031CA` | — |
-| **Program memory** | `3292` | **`0x00003292`** | — |
-| Whole upload image | `2FAA…` | `0x00002FAA` + **13464** | `getNumberOfUploadTransferBytes` |
+| Block-name table / names | `0688`, `0708` | bare | 100, 800 |
+| MessageMemoryRTF (7 reads) | `0AA8`…`2D2A` | bare | 6, 100, 6400, 50, 25, 256, 640 |
+| Program-offset table | `2FAA` | `0x00002FAA` | 420 |
+| Anchor tables (6 reads) | `31CA`…`327E` | bare | 40, 60, 20, 40, 20, 20 |
+| **Program memory** | `3292` | **`0x00003292`** | 3800 |
 
-The tool reads the eight `Logo6.getMemories` objects separately, using their bare bases, and places
-them at their address-relative offsets in one **13464-byte** image. It never deliberately crosses a
-region boundary: any exception or incomplete transfer aborts the capture rather than zero-filling a
-partial file. The image is saved raw; there is **no 0BA6 netlist decoder yet**.
+`Logo6.getMemories` declares 11 top-level objects; `MessageMemoryRTF` expands into seven transfers,
+so an upload performs **17 exact Memory reads in declaration order**. Their actual payload totals
+**12,797 bytes**. The tool places those bytes at address-relative offsets in a **15,074-byte** raw
+image spanning `0x0688…0x416A`; gaps remain zero and are never requested. LSC's
+`getNumberOfUploadTransferBytes() == 13,464` is a nominal progress estimate, not a contiguous range
+or the sum of the wire reads. Any exception or incomplete transfer aborts the capture rather than
+zero-filling a partial file. There is **no 0BA6 netlist decoder yet**.
 
 > 🔴 **These program addresses are BARE, not paged.** The `≥0x1F00 → OR 0xFF0000` paging lives in
 > `getAdress`, which is used for the *symbolic register* reads (flag `0x48FF`, magic `0x1F00`,
