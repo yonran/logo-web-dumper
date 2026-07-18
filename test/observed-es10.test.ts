@@ -186,6 +186,28 @@ test('unlock keeps the verified byte-read session instead of risking a rejected 
   assert.equal(h.store.get().unlocked, true);
 });
 
+test('unlocked read goes STRAIGHT to Read Block — no mode query or paged register read first', async () => {
+  // Hardware: a mode query (0x55) or a paged Read Byte (0x00FF48FF) after the unlock re-locks the
+  // Read Block window. So the unlocked fast path must issue neither before the first Read Block —
+  // only the re-assert clear write (0x01 to 0x00FF4800), then the block.
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, program: new Uint8Array(64).fill(0x77) });
+  await clearProtectionAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, true);
+  const before = h.device.writes.length;
+  await readAllAndDecode(h.app);
+  const readWrites = h.device.writes.slice(before);
+  const firstBlock = readWrites.findIndex((w) => w[0] === 0x05);
+  assert.ok(firstBlock >= 0, 'a Read Block was issued');
+  const preamble = readWrites.slice(0, firstBlock);
+  assert.ok(!preamble.some((w) => w[0] === 0x55), 'no mode query before the first Read Block');
+  assert.ok(!preamble.some((w) => w[0] === 0x02 && w[2] === 0xff && w[3] === 0x48 && w[4] === 0xff), 'no paged 0x48FF read before the first Read Block');
+  // The only write before the block is the re-asserted clear (0x01 → 0x00FF4800).
+  assert.ok(
+    preamble.every((w) => w[0] === 0x01 && w[1] === 0x00 && w[2] === 0xff && w[3] === 0x48 && w[4] === 0x00),
+    'the only pre-block write is the re-asserted clear',
+  );
+});
+
 test('full read preserves the session that was successfully unlocked', async () => {
   const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, program: new Uint8Array(512).fill(0x44) });
   await clearProtectionAndUnlock(h.app);

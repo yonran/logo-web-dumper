@@ -92,6 +92,21 @@ async function readBlockImage(app: App, conn: Connection): Promise<void> {
  * yet unlocked, since that would only yield zeros.
  */
 export async function readAllAndDecode(app: App): Promise<void> {
+  // 0BA6 FAST PATH — the block-read window is fragile. Hardware proof: the unlock's 16-byte Read
+  // Block at 0x00003292 succeeds, but the very next Read Block fails with NOK 03 after only a mode
+  // query (0x55) and a PAGED Read Byte (0x00FF48FF) in between. So on the ES10 a mode query or a
+  // paged register read RE-LOCKS the just-opened block window (bare Read Bytes in the unlock probe
+  // did not). When we are already unlocked, therefore, do NOT issue getMode or read 0x48FF first —
+  // re-assert the clear write (0x00FF4800 = 0, a plain Write Byte) and go STRAIGHT to Read Block
+  // with nothing in between.
+  if (app.store.get().unlocked && app.conn?.known && app.conn.mem.readMode === 'block') {
+    const c = app.requireConn();
+    c.abort = false;
+    app.log('Unlocked — re-asserting the clear write and reading immediately (no mode/register read in between: those re-lock the Read Block window on the ES10).', 'mut');
+    await c.writeByte(ADDR.PL_CLEAR, 0x00);
+    await readBlockImage(app, c);
+    return;
+  }
   // LSC reads the program in the same session in which it clears protection. Do not throw away a
   // verified unlock with Restart → Connect; locked/ordinary reads still use the recovery preamble.
   const conn = app.store.get().unlocked ? await confirmStoppedInCurrentSession(app) : await ensureStopped(app);
