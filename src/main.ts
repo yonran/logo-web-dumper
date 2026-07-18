@@ -32,6 +32,7 @@ const ui: Ui = {
   input: (id) => $<HTMLInputElement>(`#${id}`).value,
   setNetlist: (t) => {
     $('#netlist').textContent = t;
+    $('#netlisttools').hidden = !t.trim(); // show "Copy blocks" only when there is a listing
   },
   setDiagram: (mermaid) => {
     currentMermaid = mermaid;
@@ -88,7 +89,19 @@ const ui: Ui = {
 const app = new App(store, logger, ui);
 wireUi(app);
 
-// Copy the Mermaid source to the clipboard (fallback / for pasting into any renderer).
-$('#copymermaid').onclick = () => {
-  if (currentMermaid) void copyText(currentMermaid);
-};
+// Copy a value to the clipboard, briefly flashing the button so the click is acknowledged.
+function copyButton(btn: HTMLButtonElement, get: () => string | null): void {
+  btn.onclick = () => {
+    const text = get();
+    if (!text) return;
+    const label = btn.textContent ?? 'Copy';
+    void copyText(text).then((ok) => {
+      btn.textContent = ok ? 'Copied ✓' : 'Copy failed';
+      setTimeout(() => {
+        btn.textContent = label;
+      }, 1200);
+    });
+  };
+}
+copyButton($<HTMLButtonElement>('#copyblocks'), () => $('#netlist').textContent);
+copyButton($<HTMLButtonElement>('#copymermaid'), () => currentMermaid);
