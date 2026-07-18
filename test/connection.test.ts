@@ -114,12 +114,14 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('readRegionViaBlock rejects a border fault and recovers the latched protocol', async () => {
-  // 0x0688 has exactly 100 bytes. Asking for 128 crosses its unmapped gap and must not produce a
-  // plausible-looking partial/zero-filled result. Read Block recovery sends Restart after NOK 03.
+test('readRegionViaBlock returns ONLY the bytes read (partial) at a border, and Restarts once', async () => {
+  // The fake maps exactly the 17 LSC regions (gaps unmapped). The bar-graphs region 0x2C16 is 256
+  // bytes (16-aligned); overshooting into its gap must return exactly the 256 real bytes — a PARTIAL,
+  // never a zero-padded 288 — and readBlock's recovery sends one Restart (0x22) to clear the latch.
   const { c, d } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true });
-  await assert.rejects(c.readRegionViaBlock(0x0688, 128, 'bad range'));
-  assert.equal(d.writes.filter((w) => w[0] === 0x22).length, 1);
+  const out = await c.readRegionViaBlock(0x2c16, 288, 'bar graphs +32');
+  assert.equal(out.length, 256, 'returns exactly the mapped 256 bytes, not the requested 288');
+  assert.equal(d.writes.filter((w) => w[0] === 0x22).length, 1, 'one Restart cleared the latch');
 });
 
 test('readRegionViaBlock propagates a genuine (non-border) Read Block failure', async () => {

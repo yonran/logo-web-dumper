@@ -1,9 +1,86 @@
 // Program read + decode actions.
 
 import type { App } from '../app.js';
+import type { Connection } from '../pg/connection.js';
 import { ADDR, isPasswordSet } from '../pg/constants.js';
 import { decodeCombined } from '../decode/program.js';
 import { confirmStoppedInCurrentSession, deviceSlug, ensureStopped } from './common.js';
+
+/**
+ * 0BA6 two-tier Read Block capture. Read Block latches on ANY illegal-access, and the Restart that
+ * clears the latch RE-LOCKS the just-unlocked program (proven on ES10 hardware). So:
+ *  Tier 1 — read the PROGRAM BODY first (the one region proven block-readable) and save it as its
+ *           own reliable artifact, capturing exactly the bytes returned (never zero-padded).
+ *  Tier 2 — only if the program read cleanly (no fault → no re-locking Restart), attempt the other
+ *           LSC Memory regions for a complete image; stop at the first that faults and clearly mark
+ *           the image partial. A faulted region is NEVER represented as successfully-read zeros.
+ */
+async function readBlockImage(app: App, conn: Connection): Promise<void> {
+  const mem = conn.mem;
+  const slug = deviceSlug(conn.deviceName);
+  const minBase = Math.min(...mem.regions.map((r) => r.base));
+  const span = Math.max(...mem.regions.map((r) => r.base + r.len)) - minBase;
+  const full = new Uint8Array(span);
+  const progR = mem.regions.find((r) => r.base === mem.programBase);
+  if (!progR) {
+    app.log('Internal error: the device map has no program-body region.', 'err');
+    return;
+  }
+
+  // ---- Tier 1: the program body, first and independent.
+  app.log('Reading the PROGRAM BODY first (' + progR.len + ' bytes via Read Block, ~' + Math.round(progR.len / 300) + 's) — the primary artifact. Press “Abort” to stop.', 'mut');
+  const progData = await conn.readRegionViaBlock(progR.base, progR.len, progR.name);
+  full.set(progData, (progR.base - minBase) >>> 0);
+  const progComplete = progData.length === progR.len;
+  const progNz = progData.reduce((n, b) => n + (b ? 1 : 0), 0);
+  const progFname = 'logo_' + slug + '_program.bin';
+  app.ui.download(progFname, progData);
+  app.store.set({ dumped: true });
+  if (progNz === 0) {
+    app.log('⚠ Program body read back ALL ZERO (' + progData.length + ' bytes) — the program is not unlocked (run step 3 first) or block-read did not open. Saved anyway for diagnosis.', 'err');
+  } else if (progComplete) {
+    app.log('✅ Program body captured: ' + progData.length + ' bytes (' + progNz + ' non-zero) → ' + progFname, 'ok');
+  } else {
+    app.log('✅ Program body captured (PARTIAL): ' + progData.length + '/' + progR.len + ' bytes (' + progNz + ' non-zero) up to a boundary → ' + progFname + '. That is the reliable artifact; the Restart re-locked the session, so the rest of the image is not attempted.', 'ok');
+  }
+
+  // ---- Tier 2: the remaining LSC regions, best-effort, only if the program read left the session
+  // usable (progComplete ⇒ no fault ⇒ no re-locking Restart happened).
+  let imageComplete = progComplete;
+  let regionsOk = progComplete ? 1 : 0;
+  if (progComplete) {
+    try {
+      for (const r of mem.regions) {
+        if (r === progR) continue;
+        const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
+        full.set(data, (r.base - minBase) >>> 0);
+        if (data.length < r.len) {
+          imageComplete = false;
+          app.log('Full LSC image INCOMPLETE — region "' + r.name + '" ended at ' + data.length + '/' + r.len + '; the Restart re-locked the session, so no further regions are read. Program-body artifact is unaffected.', 'err');
+          break;
+        }
+        regionsOk++;
+      }
+    } catch (e) {
+      imageComplete = false;
+      app.log('Full LSC image read stopped: ' + (e instanceof Error ? e.message : String(e)) + '. Program-body artifact is retained.', 'err');
+    }
+  }
+
+  const nz = full.reduce((n, b) => n + (b ? 1 : 0), 0);
+  const fname = 'logo_' + slug + '_full.bin';
+  app.ui.download(fname, full);
+  app.ui.setNetlist(
+    (imageComplete
+      ? '✅ Complete LSC image captured: ' + full.length + ' bytes, all ' + mem.regions.length + ' regions (' + nz + ' non-zero).\n'
+      : '⚠ PARTIAL image: the program body (' + progFname + ') is the reliable part. The full ' + mem.regions.length + '-region image is incomplete (' + regionsOk + ' region(s) read); UNREAD regions are zero in this file and must NOT be trusted.\n') +
+      'Saved ' + fname + '. No 0BA6 netlist decoder yet — the .bin holds the raw device bytes for offline analysis.',
+  );
+  app.log(
+    imageComplete ? 'Saved complete image ' + fname + ' (' + nz + ' non-zero).' : 'Saved partial image ' + fname + ' (' + nz + ' non-zero); the program body is the reliable artifact.',
+    imageComplete ? 'ok' : 'err',
+  );
+}
 
 /**
  * Read the pointer table, wiring, and program via Read Byte, save the combined dump, and
@@ -29,25 +106,17 @@ export async function readAllAndDecode(app: App): Promise<void> {
   // Region addresses/lengths come from the DETECTED device's map (0BA6 reads the high bare image;
   // 0BA5/0BA4 the low legacy layout) — reading the wrong family's addresses returns 0xFF/0x00.
   const mem = conn.mem;
-  const total = mem.regions.reduce((n, r) => n + r.len, 0);
-  const via = mem.readMode === 'block' ? 'Read Block (0x05)' : 'Read Byte (0x02)';
-  const est = mem.readMode === 'block' ? Math.round(total / 300) : Math.round(total / 30);
-  app.log('Reading the program image for ' + conn.deviceName + ' (' + total + ' bytes via ' + via + ', ~' + est + 's)…', 'mut');
-  app.log('Press “Abort” to stop.', 'mut');
-  let full: Uint8Array;
+  // 0BA6: two-tier Read Block capture (program body first, best-effort full image). See below.
   if (mem.readMode === 'block') {
-    // Reproduce Logo6.uploadBlocks: all exact Memory ranges in getMemories declaration order.
-    // Preserve their raw address offsets in the saved image; gaps are zero and never transferred.
-    const minBase = Math.min(...mem.regions.map((r) => r.base));
-    const span = Math.max(...mem.regions.map((r) => r.base + r.len)) - minBase;
-    full = new Uint8Array(span);
-    for (const r of mem.regions) {
-      const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
-      full.set(data.subarray(0, r.len), (r.base - minBase) >>> 0);
-    }
-  } else {
-    full = new Uint8Array(total);
-    // Byte mode (legacy 0BA4/0BA5): the artificial 2460-byte combined layout, read in order.
+    await readBlockImage(app, conn);
+    return;
+  }
+  const total = mem.regions.reduce((n, r) => n + r.len, 0);
+  app.log('Reading the program image for ' + conn.deviceName + ' (' + total + ' bytes via Read Byte (0x02), ~' + Math.round(total / 30) + 's)…', 'mut');
+  app.log('Press “Abort” to stop.', 'mut');
+  // Byte mode (legacy 0BA4/0BA5): the artificial 2460-byte combined layout, read in order.
+  const full = new Uint8Array(total);
+  {
     let o = 0;
     for (const r of mem.regions) {
       const data = await conn.readRegion(r.base, r.len, r.name);

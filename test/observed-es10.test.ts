@@ -134,38 +134,28 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
   assert.equal(h.store.get().dumped, false);
 });
 
-test('0BA6 read follows every exact LSC range in declaration order', async () => {
-  const h = makeHarness({
-    ...ES10,
-    passwordExists: false,
-    blockReadsWork: true,
-    blockRejectUnmapped: true,
-    program: new Uint8Array(16).fill(0x5a),
-  }); // unprotected → readable
+test('0BA6 two-tier read: program body FIRST, ≤16-byte blocks within LSC bounds, two artifacts', async () => {
+  const h = makeHarness({ ...ES10, passwordExists: false, blockReadsWork: true, program: new Uint8Array(16).fill(0x5a) });
   await readAllAndDecode(h.app);
-  const reads = h.device.writes.filter((w) => w[0] === 0x05);
-  const decoded = reads.map((w) => ({
-    addr: (((w[1] << 24) | (w[2] << 16) | (w[3] << 8) | w[4]) >>> 0),
-    count: (w[5] << 8) | w[6],
-  }));
-  assert.ok(decoded.every((r) => r.count > 0 && r.count <= 16), 'uses conservative blocks of at most 16 bytes');
+  const reads = h.device.writes
+    .filter((w) => w[0] === 0x05)
+    .map((w) => ({ addr: ((w[1] << 24) | (w[2] << 16) | (w[3] << 8) | w[4]) >>> 0, count: (w[5] << 8) | w[6] }));
+  assert.ok(reads.every((r) => r.count > 0 && r.count <= 16), 'uses conservative blocks of at most 16 bytes');
   assert.ok(
-    decoded.every((read) =>
-      LSC_0BA6_MEMORY_RANGES.some(([base, len]) => read.addr >= base && read.addr + read.count <= base + len),
-    ),
+    reads.every((read) => LSC_0BA6_MEMORY_RANGES.some(([base, len]) => read.addr >= base && read.addr + read.count <= base + len)),
     'no Read Block crosses an LSC Memory boundary',
   );
-  const firstBases = decoded.filter((read, i) => decoded.findIndex((r) => r.addr === read.addr) === i).map((r) => r.addr);
-  assert.deepEqual(
-    firstBases.filter((addr) => LSC_0BA6_MEMORY_RANGES.some(([base]) => base === addr)),
-    LSC_0BA6_MEMORY_RANGES.map(([base]) => base),
-  );
-  // Address-preserving output spans 0x0688..0x3292+3800; the body begins at offset 11274.
-  assert.equal(h.ui.downloads.length, 1);
-  assert.equal(h.ui.downloads[0].bytes.length, 15_074);
-  assert.equal(h.ui.downloads[0].bytes[11_274], 0x5a);
-  // No decoder for 0BA6 yet, but the raw bytes are captured and the dump is marked done.
-  assert.ok(logged(h.logger, 'Raw program image captured') || logged(h.logger, 'No netlist decoder'));
+  // Tier 1: the program body (proven block-readable) is read FIRST, before any metadata region.
+  assert.equal(reads[0].addr, h.conn.mem.programBase, 'program body is read first');
+  // Two-tier output: a reliable program-body artifact plus the address-preserving full image.
+  assert.equal(h.ui.downloads.length, 2);
+  const prog = h.ui.downloads.find((d) => d.name.endsWith('_program.bin'));
+  const image = h.ui.downloads.find((d) => d.name.endsWith('_full.bin'));
+  assert.ok(prog && image, 'saves both a program artifact and a full image');
+  assert.equal(prog.bytes[0], 0x5a);
+  // Full image spans 0x0688..0x3292+3800 = 15074; the body begins at offset 0x3292-0x0688 = 11274.
+  assert.equal(image.bytes.length, 15_074);
+  assert.equal(image.bytes[11_274], 0x5a);
   assert.equal(h.store.get().dumped, true);
 });
 
@@ -185,8 +175,9 @@ test('full read preserves the session that was successfully unlocked', async () 
   await readAllAndDecode(h.app);
   const reconnectsAfter = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
   assert.equal(reconnectsAfter, reconnectsBefore, 'must not restart/reconnect after a verified unlock');
-  assert.equal(h.ui.downloads.length, 1);
-  assert.equal(h.ui.downloads[0].bytes.length, 15_074);
+  // Two-tier: a program artifact + the full image; a clean read (no fault) needs no Restart.
+  assert.equal(h.ui.downloads.length, 2);
+  assert.equal(h.ui.downloads.find((d) => d.name.endsWith('_full.bin'))?.bytes.length, 15_074);
 });
 
 test('full read aborts and saves nothing on a GENUINE Read Block failure after unlock', async () => {
@@ -201,16 +192,20 @@ test('full read aborts and saves nothing on a GENUINE Read Block failure after u
   assert.equal(h.store.get().dumped, false);
 });
 
-test('full read aborts, recovers, and saves nothing on NOK 03 inside an exact region', async () => {
-  const h = makeHarness({
-    ...ES10,
-    passwordExists: false,
-    blockReadsWork: true,
-    rejectBlockAt: 0x0aae,
-  });
-  await assert.rejects(readAllAndDecode(h.app));
-  assert.equal(h.ui.downloads.length, 0);
-  assert.equal(h.store.get().dumped, false);
+test('NOK 03 in a METADATA region keeps the program-body artifact and saves a PARTIAL image', async () => {
+  // A metadata region faults, but the program body (read first) is already captured. Per the agreed
+  // two-tier model we retain the reliable program artifact and save a clearly-marked partial image —
+  // we do NOT throw away the program, and we do NOT represent the faulted region as read zeros.
+  const h = makeHarness({ ...ES10, passwordExists: false, blockReadsWork: true, rejectBlockAt: 0x0aae, program: new Uint8Array(3800).fill(0x44) });
+  await readAllAndDecode(h.app); // completes (does not reject) — the program is captured
+  const prog = h.ui.downloads.find((d) => d.name.endsWith('_program.bin'));
+  assert.ok(prog, 'the reliable program-body artifact is saved');
+  assert.equal(prog.bytes.length, 3800);
+  assert.ok([...prog.bytes].every((b) => b === 0x44), 'program body is complete and real');
+  assert.ok(h.ui.downloads.some((d) => d.name.endsWith('_full.bin')), 'a (partial) full image is also saved');
+  assert.ok(logged(h.logger, 'INCOMPLETE'), 'the image is reported incomplete');
+  assert.equal(h.store.get().dumped, true);
+  // preamble Restart + one fault-recovery Restart at the metadata region.
   assert.equal(h.device.writes.filter((w) => w[0] === 0x22).length, 2, 'preamble plus fault recovery');
 });
 

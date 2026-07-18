@@ -316,7 +316,21 @@ export class Connection {
         throw new Error('aborted');
       }
       const n = Math.min(maxChunk, count - off);
-      const data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
+      let data: Uint8Array;
+      try {
+        data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
+      } catch (e) {
+        // Illegal access (0x03) = we ran past this region's real content (or the firmware's max
+        // block size). readBlock has already Restarted to clear the latch (which re-locks the
+        // program on the ES10), so we can't continue this region. Return ONLY the bytes actually
+        // read as a PARTIAL result — never a zero-filled buffer that would look like real zeros.
+        // A genuine failure (transient after retries, XOR, unexpected) still propagates.
+        if (e instanceof PgError && e.nok === 0x03) {
+          this.logger.log('  ' + label + ': INCOMPLETE — ' + off + '/' + count + ' bytes before a NOK 03 boundary (session was restarted).', off > 0 ? 'err' : 'err');
+          return out.subarray(0, off);
+        }
+        throw e;
+      }
       out.set(data, off);
       off += n;
       const el = (Date.now() - t0) / 1000;
