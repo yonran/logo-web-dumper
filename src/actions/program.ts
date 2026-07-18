@@ -26,7 +26,7 @@ export async function readAllAndDecode(app: App): Promise<void> {
     app.log('Program is PASSWORD-PROTECTED (0x00FF48FF=0x40) and not unlocked — a read would return all zeros. Press “3 · Recover password & attempt unlock” first. Nothing read or saved.', 'err');
     return;
   }
-  // Region addresses/lengths come from the DETECTED device's map (0BA6 reads the high paged image;
+  // Region addresses/lengths come from the DETECTED device's map (0BA6 reads the high bare image;
   // 0BA5/0BA4 the low legacy layout) — reading the wrong family's addresses returns 0xFF/0x00.
   const mem = conn.mem;
   const total = mem.regions.reduce((n, r) => n + r.len, 0);
@@ -36,13 +36,10 @@ export async function readAllAndDecode(app: App): Promise<void> {
   app.log('Press “Abort” to stop.', 'mut');
   const full = new Uint8Array(total);
   if (mem.readMode === 'block') {
-    // Block mode (0BA6): read each Memory region SEPARATELY (Read Block cannot cross a region
-    // border) and place it at its address offset. Read the big program-BODY region FIRST — it reads
-    // cleanly, whereas the small metadata regions back off at their borders (a few Restarts each);
-    // reading the body first banks it before any of that churn can disturb the session.
+    // Block mode (0BA6): read every Memory object separately in LSC getMemories order. Any rejected
+    // or incomplete telegram throws, so an exception/reconnect can never yield a mixed-session dump.
     const minBase = Math.min(...mem.regions.map((r) => r.base));
-    const order = [...mem.regions].sort((a, b) => b.len - a.len);
-    for (const r of order) {
+    for (const r of mem.regions) {
       const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
       full.set(data, (r.base - minBase) >>> 0);
     }

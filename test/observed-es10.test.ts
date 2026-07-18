@@ -170,6 +170,15 @@ test('full read preserves the session that was successfully unlocked', async () 
   assert.equal(h.ui.downloads[0].bytes.length, 13464);
 });
 
+test('full read aborts and saves nothing if a Memory region faults after unlock', async () => {
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(512).fill(0x44) });
+  await clearProtectionAndUnlock(h.app);
+  assert.equal(h.store.get().unlocked, true);
+  await assert.rejects(readAllAndDecode(h.app));
+  assert.equal(h.ui.downloads.length, 0, 'must not save a mixed-session or zero-filled partial image');
+  assert.equal(h.store.get().dumped, false);
+});
+
 test('uniform program images are saved as diagnostic evidence', async () => {
   const h = makeHarness({ identNo: 0x42, passwordExists: false, program: new Uint8Array(0) });
   await readAllAndDecode(h.app);

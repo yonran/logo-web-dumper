@@ -276,9 +276,10 @@ layout. This tool selects the map from the detected IdentNo (see `src/pg/device.
 | **Program memory** | `3292` | **`0x00003292`** | — |
 | Whole upload image | `2FAA…` | `0x00002FAA` + **13464** | `getNumberOfUploadTransferBytes` |
 
-The tool reads the 0BA6 program as one contiguous **13464-byte** image from the bare `0x00002FAA`. It is
-saved raw; there is **no 0BA6 netlist decoder yet** (the `Logo6` offset-table/block format is not
-reversed). Only the legacy 2460-byte 0BA4/0BA5 layout is decoded to a netlist.
+The tool reads the eight `Logo6.getMemories` objects separately, using their bare bases, and places
+them at their address-relative offsets in one **13464-byte** image. It never deliberately crosses a
+region boundary: any exception or incomplete transfer aborts the capture rather than zero-filling a
+partial file. The image is saved raw; there is **no 0BA6 netlist decoder yet**.
 
 > 🔴 **These program addresses are BARE, not paged.** The `≥0x1F00 → OR 0xFF0000` paging lives in
 > `getAdress`, which is used for the *symbolic register* reads (flag `0x48FF`, magic `0x1F00`,

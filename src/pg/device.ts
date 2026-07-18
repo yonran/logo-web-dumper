@@ -1,18 +1,16 @@
 // Device profile: what differs between the LOGO! families this tool speaks to. Two things vary:
 //   1. the on-the-wire address WIDTH (2 bytes on 0BA5, 4 on 0BA6) — `addrWidth`;
-//   2. WHERE the program lives — the 0BA4/0BA5 map is low and bare, the 0BA6 map is high and paged
-//      (0x00FF____). This is NOT captured by addrWidth alone, so it lives in `mem` (ProgramMap).
+//   2. WHERE the program lives — both maps are bare Memory bases, but the 0BA6 bases are higher.
 // The shared registers (password/name/protection) are the same across families via getAdress and
 // stay in constants.ts. Verified against LSC: Logo4.getMemories (0BA4/0BA5) vs Logo6.getMemories
 // (0BA6, inherited by ES3/ES10); getAdress pages addresses ≥0x1F00.
 
 import { IDENT_NAMES } from './constants.js';
 
-/** One contiguous span of the uploaded program image, in read order. */
+/** One independently transferred Memory object in the uploaded image. */
 export interface ProgramRegion {
   /**
-   * Wire address in this device's final form: the 0BA6 map stores it already paged (0x00FF____),
-   * the low legacy map stores it bare — a 2-byte device just masks to the low 16 bits at encode time.
+   * Raw Memory base. It never passes through the symbolic-register getAdress paging rule.
    */
   readonly base: number;
   readonly len: number;
@@ -53,11 +51,10 @@ const MAP_LEGACY: ProgramMap = {
 };
 
 // 0BA6 (LSC Logo6.getMemories): the upload image is EIGHT separate Memory objects, each read on its
-// own — Read Block (0x05) rejects a read that crosses a Memory-region border (illegal access 0x03,
-// "read across the border"), so we must read each region separately, NOT one contiguous 13464-byte
-// span. The bases below are the getMemories bases; each len is the gap to the next base (its MAX
-// size). Each region's true content may be shorter (getMaxResource-based), so readRegionViaBlock
-// backs the chunk off at the border and stops when even a tiny block is rejected.
+// own — Read Block (0x05) rejects a read that crosses a Memory-region border (illegal access 0x03),
+// so we read each declared region separately, never one contiguous 13464-byte span. LSC obtains
+// dynamic resource lengths from getMaxResource; these capacities are the known address spans. A
+// rejection aborts the capture because probing past a boundary would restart and lose an unlock.
 //
 // These are BARE 4-byte addresses (0x0000____), NOT paged: the ≥0x1F00 → OR 0xFF0000 rule lives in
 // getAdress() (constants.ts), used only for symbolic register reads. Memory reads
@@ -97,7 +94,7 @@ export interface DeviceProfile {
 /** 0BA5: 2-byte addressing, no 0xFF page, legacy (0BA4-inherited) program map. */
 export const BA5: DeviceProfile = { identNo: 0x42, name: '0BA5', addrWidth: 2, mem: MAP_LEGACY, known: true };
 
-/** 0BA6 family (0BA6 / ES3 / ES10): 4-byte addressing, high paged program map. */
+/** 0BA6 family (0BA6 / ES3 / ES10): 4-byte addressing, high but bare program map. */
 export function ba6(ident: number): DeviceProfile {
   return { identNo: ident, name: IDENT_NAMES[ident] ?? '0x' + ident.toString(16), addrWidth: 4, mem: MAP_0BA6, known: true };
 }
