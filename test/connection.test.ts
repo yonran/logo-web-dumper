@@ -33,13 +33,13 @@ test('getAdress is NOT applied to the program image — 0x3292 is ≥ 0x1F00 yet
   assert.notEqual(c.mem.programBase, getAdress(0x3292)); // getAdress(0x3292) === 0x00FF3292
 });
 
-test('0BA6 map matches all exact LSC ranges, transfer total, and address span', () => {
+test('0BA6 map matches LSC logical allocations and address span', () => {
   const c = new Connection(new FakeDevice({ identNo: 0x45 }), new Logger());
   assert.deepEqual(
     c.mem.regions.map((r) => [r.base, r.len]),
     LSC_0BA6_MEMORY_RANGES.map(([base, len]) => [base, len]),
   );
-  assert.equal(c.mem.regions.reduce((sum, r) => sum + r.len, 0), 12_797);
+  assert.equal(c.mem.regions.reduce((sum, r) => sum + r.len, 0), 12_797, 'maximum allocated payload, before sparse message selection');
   assert.equal(Math.max(...c.mem.regions.map((r) => r.base + r.len)) - Math.min(...c.mem.regions.map((r) => r.base)), 15_074);
 });
 
@@ -114,13 +114,10 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('readRegionViaBlock returns ONLY the bytes read (partial) at a border, and Restarts once', async () => {
-  // The fake maps exactly the 17 LSC regions (gaps unmapped). The bar-graphs region 0x2C16 is 256
-  // bytes (16-aligned); overshooting into its gap must return exactly the 256 real bytes — a PARTIAL,
-  // never a zero-padded 288 — and readBlock's recovery sends one Restart (0x22) to clear the latch.
+test('readRegionViaBlock rejects a border fault and Restarts once', async () => {
+  // LSC supplies exact lengths; a border fault means the map/transfer is wrong, not success.
   const { c, d } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true });
-  const out = await c.readRegionViaBlock(0x2c16, 288, 'bar graphs +32');
-  assert.equal(out.length, 256, 'returns exactly the mapped 256 bytes, not the requested 288');
+  await assert.rejects(c.readRegionViaBlock(0x2c16, 288, 'bar graphs +32'));
   assert.equal(d.writes.filter((w) => w[0] === 0x22).length, 1, 'one Restart cleared the latch');
 });
 

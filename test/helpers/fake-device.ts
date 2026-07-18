@@ -59,6 +59,7 @@ export interface FakeDeviceConfig {
   password?: string; // stored cleartext (≤10 chars)
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
+  messageIds?: readonly number[]; // populated Logo6 message IDs (0..49); empty by default
   flakyReads?: number; // drop the response to the first N Read Byte commands (transient glitch)
   flakyBlockReads?: number; // drop the complete response to the first N Read Block commands
   corruptBlockReads?: number; // corrupt the checksum on the first N successful Read Block replies
@@ -126,6 +127,13 @@ export class FakeDevice implements Transport {
     if (this.addrWidth === 4) {
       for (const [base, len] of LSC_0BA6_MEMORY_RANGES) {
         for (let i = 0; i < len; i++) this.progMem.set(this.progWire(base + i), 0);
+      }
+      // LSC tests byte 0 of each two-byte offset entry: 0xFF means unused.
+      for (let i = 0; i < 100; i++) this.progMem.set(this.progWire(0x0aae + i), 0xff);
+      for (const id of config.messageIds ?? []) {
+        if (!Number.isInteger(id) || id < 0 || id >= 50) throw new RangeError('messageIds must be 0..49');
+        this.progMem.set(this.progWire(0x0aae + id * 2), 0x00);
+        this.progMem.set(this.progWire(0x0aae + id * 2 + 1), 0x00);
       }
     }
     const progBase = this.addrWidth === 4 ? BASE.PROGRAM_0BA6 : BASE.PROGRAM_LEGACY;

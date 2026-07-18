@@ -134,8 +134,14 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
   assert.equal(h.store.get().dumped, false);
 });
 
-test('0BA6 two-tier read: program body FIRST, ≤16-byte blocks within LSC bounds, two artifacts', async () => {
-  const h = makeHarness({ ...ES10, passwordExists: false, blockReadsWork: true, program: new Uint8Array(16).fill(0x5a) });
+test('0BA6 reads program first, then reproduces LSC sparse message-text selection', async () => {
+  const h = makeHarness({
+    ...ES10,
+    passwordExists: false,
+    blockReadsWork: true,
+    messageIds: [1, 2, 6, 9],
+    program: new Uint8Array(16).fill(0x5a),
+  });
   await readAllAndDecode(h.app);
   const reads = h.device.writes
     .filter((w) => w[0] === 0x05)
@@ -147,6 +153,19 @@ test('0BA6 two-tier read: program body FIRST, ≤16-byte blocks within LSC bound
   );
   // Tier 1: the program body (proven block-readable) is read FIRST, before any metadata region.
   assert.equal(reads[0].addr, h.conn.mem.programBase, 'program body is read first');
+  const textReads = reads.filter((r) => r.addr >= 0x0b2e && r.addr < 0x2b36);
+  assert.equal(textReads[0].addr, 0x0b2e + 128, 'first populated run starts at message ID 1');
+  assert.ok(textReads.some((r) => r.addr === 0x0b2e + 6 * 128), 'second populated run starts at message ID 6');
+  assert.equal(
+    textReads.reduce((n, r) => n + r.count, 0),
+    2 * 128 + 4 * 128,
+    'IDs 1..2 form one run; IDs 6 and 9 coalesce into the inclusive 6..9 run',
+  );
+  assert.equal(
+    textReads.some((r) => r.addr >= 0x0b2e + 3 * 128 && r.addr < 0x0b2e + 6 * 128),
+    false,
+    'does not read the unused gap between the two LSC runs',
+  );
   // Two-tier output: a reliable program-body artifact plus the address-preserving full image.
   assert.equal(h.ui.downloads.length, 2);
   const prog = h.ui.downloads.find((d) => d.name.endsWith('_program.bin'));
@@ -192,18 +211,15 @@ test('full read aborts and saves nothing on a GENUINE Read Block failure after u
   assert.equal(h.store.get().dumped, false);
 });
 
-test('NOK 03 in a METADATA region keeps the program-body artifact and saves a PARTIAL image', async () => {
-  // A metadata region faults, but the program body (read first) is already captured. Per the agreed
-  // two-tier model we retain the reliable program artifact and save a clearly-marked partial image —
-  // we do NOT throw away the program, and we do NOT represent the faulted region as read zeros.
+test('NOK 03 in metadata keeps only the complete program artifact', async () => {
   const h = makeHarness({ ...ES10, passwordExists: false, blockReadsWork: true, rejectBlockAt: 0x0aae, program: new Uint8Array(3800).fill(0x44) });
   await readAllAndDecode(h.app); // completes (does not reject) — the program is captured
   const prog = h.ui.downloads.find((d) => d.name.endsWith('_program.bin'));
   assert.ok(prog, 'the reliable program-body artifact is saved');
   assert.equal(prog.bytes.length, 3800);
   assert.ok([...prog.bytes].every((b) => b === 0x44), 'program body is complete and real');
-  assert.ok(h.ui.downloads.some((d) => d.name.endsWith('_full.bin')), 'a (partial) full image is also saved');
-  assert.ok(logged(h.logger, 'INCOMPLETE'), 'the image is reported incomplete');
+  assert.equal(h.ui.downloads.some((d) => d.name.endsWith('_full.bin')), false, 'no partial full image is saved');
+  assert.ok(logged(h.logger, 'aborted'), 'the composite image is reported aborted');
   assert.equal(h.store.get().dumped, true);
   // preamble Restart + one fault-recovery Restart at the metadata region.
   assert.equal(h.device.writes.filter((w) => w[0] === 0x22).length, 2, 'preamble plus fault recovery');
