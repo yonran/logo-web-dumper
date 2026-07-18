@@ -308,7 +308,6 @@ export class Connection {
     const out = new Uint8Array(count);
     const t0 = Date.now();
     let off = 0;
-    let chunk = Math.min(maxChunk, count);
     let lastLoggedAt = -1;
     this.onProgress?.({ label, done: 0, total: count, elapsedS: 0 });
     while (off < count) {
@@ -316,37 +315,18 @@ export class Connection {
         this.logger.log('  aborted at ' + off + '/' + count, 'err');
         throw new Error('aborted');
       }
-      const n = Math.min(chunk, count - off);
+      const n = Math.min(maxChunk, count - off);
       const data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
-      if (data) {
-        out.set(data, off);
-        off += n;
-        // Keep the chunk at the size that just worked (do NOT jump back to maxChunk): near a region
-        // border that would re-trigger the reject → backoff cycle for every byte (a ping-pong).
-        chunk = Math.min(chunk, count - off) || chunk;
-        const el = (Date.now() - t0) / 1000;
-        this.onProgress?.({ label, done: off, total: count, elapsedS: el });
-        if (off - lastLoggedAt >= 512 || off === count) {
-          this.logger.log('  ' + label + ': ' + off + '/' + count + ' bytes (' + Math.round((off / count) * 100) + '%), ' + el.toFixed(0) + 's', 'mut');
-          lastLoggedAt = off;
-        }
-      } else if (n > 1) {
-        // Read Block was rejected — a Memory-region border is within this block. Halve and retry
-        // from the SAME offset to read up to (but not across) the border, down to a single byte.
-        chunk = n >> 1;
-      } else {
-        // Even a 1-byte block is rejected here: this region's readable content ends at `off`.
-        // For a Memory region shorter than its max window this is expected, not an error.
-        break;
+      out.set(data, off);
+      off += n;
+      const el = (Date.now() - t0) / 1000;
+      this.onProgress?.({ label, done: off, total: count, elapsedS: el });
+      if (off - lastLoggedAt >= 512 || off === count) {
+        this.logger.log('  ' + label + ': ' + off + '/' + count + ' bytes (' + Math.round((off / count) * 100) + '%), ' + el.toFixed(0) + 's', 'mut');
+        lastLoggedAt = off;
       }
     }
-    if (off === count) {
-      this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
-    } else if (off > 0) {
-      this.logger.log('  ' + label + ': read ' + off + '/' + count + ' bytes via Read Block (region ends before its max window; rest zero-filled).', 'ok');
-    } else {
-      this.logger.log('  ' + label + ': INCOMPLETE — Read Block rejected at the region start (0/' + count + '); zero-filled.', 'err');
-    }
+    this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
     return out;
   }
 
@@ -355,49 +335,58 @@ export class Connection {
    * 1-byte XOR checksum. This is how LSC's `Memory.upload` reads the program image. On the
    * 0BA6.ES10 an EARLIER attempt was rejected `06 15 03` — but that was at the WRONG (0BA4) address
    * `0x00FF0EE8`, i.e. ILLEGAL ACCESS to an unmapped region, not "block reads unsupported". Returns
-   * the data on success, or null (with a logged reason) on any rejection/short read.
+   * only checksum-verified complete data; exceptions are typed and transient failures are retried.
    */
-  async readBlock(addr: number, count: number, label = 'Read Block'): Promise<Uint8Array | null> {
+  async readBlock(addr: number, count: number, label = 'Read Block'): Promise<Uint8Array> {
     if (!Number.isInteger(count) || count <= 0 || count > 0xffff) throw new RangeError('Read Block count must be 1..65535');
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.readBlockOnce(addr, count, label);
+      } catch (e) {
+        if (e instanceof PgError) throw e;
+        if (this.abort || attempt >= Connection.RETRIES) throw e;
+        this.logger.log('  retry ' + label + ' ' + addr8(addr) + ' (attempt ' + (attempt + 1) + '/' + Connection.RETRIES + ')', 'mut');
+      }
+    }
+  }
+
+  private async readBlockOnce(addr: number, count: number, label: string): Promise<Uint8Array> {
     const cmd = new Uint8Array([OP.READ_BLOCK, ...encodeAddr(this.device, addr), (count >> 8) & 0xff, count & 0xff]);
     await this.xport.read(4096, 60);
     await this.xport.write(cmd);
     const t0 = await this.xport.read(1, 2000);
     this.logger.log('→ ' + hex(cmd) + '   ← ' + (t0.length ? hex(t0) : '(nothing)') + '   (' + label + ' ' + addr8(addr) + ', ' + count + ' bytes)', t0.length && t0[0] === OP.ACK ? 'mut' : 'err');
     if (!t0.length) {
-      await this.recover();
-      return null;
+      throw new Error(label + ' ' + addr8(addr) + ': no response');
     }
     if (t0[0] === OP.NOK) {
       const e = await this.xport.read(1, 900);
       this.logger.log('  ' + label + ' rejected: NOK 15 ' + hex(e) + (e.length ? '  ' + cpuErrText(e[0]) : ''), 'err');
       await this.recover();
-      return null;
+      throw new PgError(label + ' rejected — ' + (e.length ? cpuErrText(e[0]) : 'missing exception code'), e.length ? e[0] : undefined);
     }
     if (t0[0] !== OP.ACK) {
       this.logger.log('  ' + label + ' unexpected first byte ' + hex(t0), 'err');
-      await this.recover();
-      return null;
+      await this.xport.read(4096, 60);
+      throw new Error(label + ': unexpected first byte ' + hex(t0));
     }
-    // Body is either `count` data bytes + 1 XOR, OR a post-ACK rejection `15 <code>` (2 bytes, no
-    // XOR). Read the first 2 bytes FAST so a rejection is caught in 2 bytes — not by waiting the full
-    // (possibly 512-byte) timeout for data that will never arrive. This also fixes the count≤2 case,
-    // where `15 03` exactly fills `count` data bytes and used to be mistaken for real data.
-    const head = await this.xport.read(Math.min(2, count + 1), 2000);
-    if (head.length >= 2 && head[0] === OP.NOK && head[1] >= 0x01 && head[1] <= 0x07) {
-      this.logger.log('  ' + label + ' → 06 then NOK 15 ' + head[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(head[1]), 'err');
+    // Read the complete success body before interpreting its contents. Binary program data may
+    // legitimately begin with `15 01`..`15 07`; only a SHORT two-byte body is an exception. Asking
+    // for a third byte first distinguishes that framing without waiting the full block timeout.
+    const prefix = await this.xport.read(Math.min(3, count + 1), 2000);
+    if (prefix.length === 2 && prefix[0] === OP.NOK && prefix[1] >= 0x01 && prefix[1] <= 0x07) {
+      this.logger.log('  ' + label + ' → 06 then NOK 15 ' + prefix[1].toString(16).padStart(2, '0') + '  ' + cpuErrText(prefix[1]), 'err');
       await this.recover();
-      return null;
+      throw new PgError(label + ' rejected — ' + cpuErrText(prefix[1]), prefix[1]);
     }
-    const need = count + 1 - head.length; // remaining data + the 1 XOR byte
-    const rest = need > 0 ? await this.xport.read(need, 12000) : new Uint8Array(0);
-    const body = new Uint8Array(head.length + rest.length);
-    body.set(head);
-    body.set(rest, head.length);
+    const remainder = count + 1 - prefix.length;
+    const suffix = remainder > 0 ? await this.xport.read(remainder, 12000) : new Uint8Array(0);
+    const body = new Uint8Array(prefix.length + suffix.length);
+    body.set(prefix);
+    body.set(suffix, prefix.length);
     if (body.length < count + 1) {
       this.logger.log('  ' + label + ' → short read ' + body.length + '/' + (count + 1) + ': ' + hex(body.slice(0, 24)), 'err');
-      await this.recover();
-      return null;
+      throw new Error(label + ': short response ' + body.length + '/' + (count + 1));
     }
     const data = body.slice(0, count);
     const cs = body[count];
@@ -405,11 +394,11 @@ export class Connection {
     for (const d of data) x ^= d;
     const ok = cs === x;
     this.logger.log('  ' + label + ' → OK, ' + count + ' bytes, XOR ' + (ok ? 'valid' : 'MISMATCH (got 0x' + cs.toString(16) + ', want 0x' + x.toString(16) + ')'), ok ? 'ok' : 'err');
-    await this.xport.read(4096, 60);
     if (!ok) {
-      await this.recover();
-      return null;
+      await this.xport.read(4096, 60);
+      throw new Error(label + ': XOR checksum mismatch');
     }
+    await this.xport.read(4096, 60);
     return data;
   }
 

@@ -37,6 +37,8 @@ export interface FakeDeviceConfig {
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
   flakyReads?: number; // drop the response to the first N Read Byte commands (transient glitch)
+  flakyBlockReads?: number; // drop the complete response to the first N Read Block commands
+  corruptBlockReads?: number; // corrupt the checksum on the first N successful Read Block replies
 }
 
 // LSC SymmetricalSimpleEncoding key — ground truth, defined independently of the tool's decoder.
@@ -54,6 +56,8 @@ export class FakeDevice implements Transport {
   private latched = false; // after an exception, everything NOKs until Restart
   private protectionLowered = false;
   private flakyLeft: number;
+  private flakyBlocksLeft: number;
+  private corruptBlocksLeft: number;
   private readonly addrWidth: 2 | 4;
   private readonly cfg: Required<
     Pick<FakeDeviceConfig, 'identNo' | 'passwordExists' | 'leaksCleartext' | 'clearWriteUnlocks' | 'blockReadsWork'>
@@ -75,6 +79,8 @@ export class FakeDevice implements Transport {
     this.addrWidth = this.cfg.identNo === 0x42 ? 2 : 4;
     this.mode = config.mode ?? 0x42;
     this.flakyLeft = config.flakyReads ?? 0;
+    this.flakyBlocksLeft = config.flakyBlockReads ?? 0;
+    this.corruptBlocksLeft = config.corruptBlockReads ?? 0;
 
     // System registers — always readable, keyed by the wire address for this device.
     this.sys.set(this.wire(BASE.PWD_MAGIC1), 0x04);
@@ -159,6 +165,9 @@ export class FakeDevice implements Transport {
     }
     if (op === 0x22) {
       this.latched = false;
+      // Protection lowering is session-scoped. Restarting to clear a protocol exception loses it,
+      // which is why a program capture must abort instead of recovering and continuing.
+      this.protectionLowered = false;
       this.push(0x06);
       return;
     }
@@ -204,6 +213,10 @@ export class FakeDevice implements Transport {
       return;
     }
     if (op === 0x05) {
+      if (this.flakyBlocksLeft > 0) {
+        this.flakyBlocksLeft--;
+        return;
+      }
       // Read Block: on the ES10 rejected with 06 (pre-parse ACK) then 15 03, latching the session.
       if (!this.cfg.blockReadsWork) {
         this.latched = true;
@@ -227,6 +240,10 @@ export class FakeDevice implements Transport {
       for (let i = 0; i < count; i++) data.push(this.readMem((a + i) >>> 0));
       let xor = 0;
       for (const d of data) xor ^= d;
+      if (this.corruptBlocksLeft > 0) {
+        this.corruptBlocksLeft--;
+        xor ^= 0xff;
+      }
       this.push(0x06, ...data, xor);
       return;
     }

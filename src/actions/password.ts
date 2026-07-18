@@ -157,7 +157,12 @@ export async function clearProtectionAndUnlock(app: App): Promise<void> {
     } else {
       // Read Block is a useful fallback when byte reads remain hidden. It is deliberately last:
       // rejection recovery may renegotiate, but no successful byte-read session remains to lose.
-      const blk = await conn.readBlock(conn.mem.programBase, 16, 'program Read Block fallback');
+      let blk: Uint8Array | null = null;
+      try {
+        blk = await conn.readBlock(conn.mem.programBase, 16, 'program Read Block fallback');
+      } catch {
+        // The fallback is diagnostic: a rejected block means the byte probes remain authoritative.
+      }
       const blkNz = blk ? [...blk].filter((b) => b).length : 0;
       const blkAllFf = blk ? blk.every((b) => b === 0xff) : false;
       if (blk && blkNz > 0 && !blkAllFf) {

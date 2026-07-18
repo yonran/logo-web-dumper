@@ -104,16 +104,28 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('readRegionViaBlock backs off at a region border and reads exactly the mapped content', async () => {
-  // A Memory region whose real content (100 bytes) is shorter than the window we ask for (300).
-  // Read Block rejects any read into the unmapped tail (like the ES10 "read across the border"), so
-  // the adaptive reader must back the chunk off, capture the 100 mapped bytes, and stop.
-  const { c, l } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(100).fill(0xab) });
-  const out = await c.readRegionViaBlock(c.mem.programBase, 300, 'prog');
-  assert.equal(out.length, 300);
-  assert.ok([...out.slice(0, 100)].every((b) => b === 0xab), 'first 100 bytes are the real content');
-  assert.ok([...out.slice(100)].every((b) => b === 0x00), 'the unreadable tail is zero-filled');
-  assert.ok(l.lines.some((x) => x.includes('region ends before its max window')));
+test('readRegionViaBlock aborts at a region border instead of saving a zero-filled partial result', async () => {
+  const { c } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(100).fill(0xab) });
+  await assert.rejects(c.readRegionViaBlock(c.mem.programBase, 300, 'prog'), (e: unknown) => e instanceof Error && 'nok' in e && e.nok === 0x03);
+});
+
+test('Read Block accepts binary data beginning with bytes that look like a NOK response', async () => {
+  const program = new Uint8Array([0x15, 0x03, 0x44, 0x55]);
+  const { c } = make({ passwordExists: false, blockReadsWork: true, program });
+  assert.deepEqual([...(await c.readBlock(c.mem.programBase, program.length))], [...program]);
+});
+
+test('Read Block retries transient no-response and checksum failures', async () => {
+  const program = new Uint8Array([0x10, 0x20, 0x30, 0x40]);
+  const { c, d } = make({ passwordExists: false, blockReadsWork: true, program, flakyBlockReads: 1, corruptBlockReads: 1 });
+  assert.deepEqual([...(await c.readBlock(c.mem.programBase, program.length))], [...program]);
+  assert.equal(d.writes.filter((w) => w[0] === 0x05).length, 3);
+});
+
+test('Read Block gives up after five transient failures rather than returning partial data', async () => {
+  const { c, d } = make({ passwordExists: false, blockReadsWork: true, flakyBlockReads: 99 });
+  await assert.rejects(c.readBlock(c.mem.programBase, 4));
+  assert.equal(d.writes.filter((w) => w[0] === 0x05).length, 5);
 });
 
 test('0BA6 map on the wire: password AND program are BARE (0x00000566 / 0x00003292)', async () => {
