@@ -104,9 +104,22 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('readRegionViaBlock aborts at a region border instead of saving a zero-filled partial result', async () => {
-  const { c } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(100).fill(0xab) });
-  await assert.rejects(c.readRegionViaBlock(c.mem.programBase, 300, 'prog'), (e: unknown) => e instanceof Error && 'nok' in e && e.nok === 0x03);
+test('readRegionViaBlock backs off at a region border and reads exactly the mapped content', async () => {
+  // A Memory region whose real content (100 bytes) is shorter than the window we ask for (300).
+  // An illegal-access at the border (0x03) means "region ends here", NOT a failure — the reader must
+  // back the chunk off, capture the 100 real bytes, and stop (the gap tail is legitimately empty).
+  const { c, l } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(100).fill(0xab) });
+  const out = await c.readRegionViaBlock(c.mem.programBase, 300, 'prog');
+  assert.equal(out.length, 300);
+  assert.ok([...out.slice(0, 100)].every((b) => b === 0xab), 'first 100 bytes are the real content');
+  assert.ok([...out.slice(100)].every((b) => b === 0x00), 'the unreadable gap tail is zero-filled');
+  assert.ok(l.lines.some((x) => x.includes('region ends at its content boundary')));
+});
+
+test('readRegionViaBlock propagates a genuine (non-border) Read Block failure', async () => {
+  // A persistent transient failure is NOT a region border — it must abort, never zero-fill silently.
+  const { c } = make({ passwordExists: false, blockReadsWork: true, flakyBlockReads: 99, program: new Uint8Array(64).fill(0x11) });
+  await assert.rejects(c.readRegionViaBlock(c.mem.programBase, 64, 'prog'));
 });
 
 test('Read Block accepts binary data beginning with bytes that look like a NOK response', async () => {

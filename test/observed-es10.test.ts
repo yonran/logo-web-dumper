@@ -170,8 +170,11 @@ test('full read preserves the session that was successfully unlocked', async () 
   assert.equal(h.ui.downloads[0].bytes.length, 13464);
 });
 
-test('full read aborts and saves nothing if a Memory region faults after unlock', async () => {
-  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(512).fill(0x44) });
+test('full read aborts and saves nothing on a GENUINE Read Block failure after unlock', async () => {
+  // A persistent transient failure (no response) is a real fault, NOT a region border, so the whole
+  // read must abort and save nothing rather than leave zeros where content should be. (A border
+  // 0x03 is different — it marks a region's real end and is handled; see readRegionViaBlock tests.)
+  const h = makeHarness({ ...ES10, leaksCleartext: true, clearWriteUnlocks: true, blockReadsWork: true, flakyBlockReads: 99, program: new Uint8Array(512).fill(0x44) });
   await clearProtectionAndUnlock(h.app);
   assert.equal(h.store.get().unlocked, true);
   await assert.rejects(readAllAndDecode(h.app));

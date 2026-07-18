@@ -36,10 +36,14 @@ export async function readAllAndDecode(app: App): Promise<void> {
   app.log('Press “Abort” to stop.', 'mut');
   const full = new Uint8Array(total);
   if (mem.readMode === 'block') {
-    // Block mode (0BA6): read every Memory object separately in LSC getMemories order. Any rejected
-    // or incomplete telegram throws, so an exception/reconnect can never yield a mixed-session dump.
+    // Block mode (0BA6): read every Memory object SEPARATELY (Read Block cannot cross a region
+    // border) and place it at its address offset. A genuine failure still throws; only an expected
+    // region-end (illegal access at the content boundary) is handled inside readRegionViaBlock.
+    // Read the big program-BODY region FIRST — it reads cleanly, whereas the small metadata regions
+    // back off at their borders (a few Restarts each); reading the body first banks it before that
+    // churn can disturb the session.
     const minBase = Math.min(...mem.regions.map((r) => r.base));
-    for (const r of mem.regions) {
+    for (const r of [...mem.regions].sort((a, b) => b.len - a.len)) {
       const data = await conn.readRegionViaBlock(r.base, r.len, r.name);
       full.set(data, (r.base - minBase) >>> 0);
     }

@@ -309,16 +309,34 @@ export class Connection {
     const t0 = Date.now();
     let off = 0;
     let lastLoggedAt = -1;
+    let chunk = Math.min(maxChunk, count);
     this.onProgress?.({ label, done: 0, total: count, elapsedS: 0 });
     while (off < count) {
       if (this.abort) {
         this.logger.log('  aborted at ' + off + '/' + count, 'err');
         throw new Error('aborted');
       }
-      const n = Math.min(maxChunk, count - off);
-      const data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
+      const n = Math.min(chunk, count - off);
+      let data: Uint8Array;
+      try {
+        data = await this.readBlock((addr + off) >>> 0, n, label + ' block');
+      } catch (e) {
+        // Illegal access (0x03) = "read across the border": this block ran past THIS Memory region's
+        // real end (its content is shorter than the max window). Halve and retry from the same
+        // offset to read right up to the border; when even a 1-byte block is rejected, the region's
+        // content ends here (the rest is the inter-region gap — legitimately empty, not lost data).
+        // Every OTHER failure (transient after retries, XOR, unexpected) propagates: a genuine
+        // mid-read failure must abort, never silently zero-fill.
+        if (e instanceof PgError && e.nok === 0x03 && n > 1) {
+          chunk = n >> 1;
+          continue;
+        }
+        if (e instanceof PgError && e.nok === 0x03) break;
+        throw e;
+      }
       out.set(data, off);
       off += n;
+      chunk = Math.min(chunk, count - off) || chunk; // stay small near a border (avoid ping-pong)
       const el = (Date.now() - t0) / 1000;
       this.onProgress?.({ label, done: off, total: count, elapsedS: el });
       if (off - lastLoggedAt >= 512 || off === count) {
@@ -326,7 +344,13 @@ export class Connection {
         lastLoggedAt = off;
       }
     }
-    this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
+    if (off === count) {
+      this.logger.log('  ' + label + ': read ' + count + ' bytes via Read Block.', 'ok');
+    } else if (off > 0) {
+      this.logger.log('  ' + label + ': read ' + off + '/' + count + ' bytes via Read Block (region ends at its content boundary; the rest is gap).', 'ok');
+    } else {
+      this.logger.log('  ' + label + ': no readable content (Read Block rejected at the region start).', 'err');
+    }
     return out;
   }
 
