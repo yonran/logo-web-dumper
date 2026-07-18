@@ -1,0 +1,47 @@
+# LOGO! PG session capture — real hardware
+# device: identNo=45 mode=42 passwordExists=1 clearWriteUnlocks=1 blockReadsWork=1 program=010019802180ffffffffffff01001f80
+# source: 0BA6.ES10, WebUSB / CH340, fw V1.07.07, 2026-07-17
+#
+# THE BREAKTHROUGH SESSION. Unlike the 2026-07-16 capture (which used the wrong 0x4740 write and the
+# wrong paged addresses), this one:
+#   1. recovers the (XOR-obfuscated) password → decodes to "RHOMBUS",
+#   2. clears protection with the CORRECT register 0x00FF4800 = 0,
+#   3. and reads the program body via READ BLOCK (0x05) at the BARE 0x00003292 — which returns real
+#      program data (0BA6 Memory reads are block-only: Read BYTE there returns 0x00).
+#
+# Format: one exchange per line, "→ <request hex>   ← <response hex | (nothing)>   (note)". The
+# replay test (test/session-replay.test.ts) builds a FakeDevice from the `# device:` header and
+# asserts the fake produces exactly the recorded response. Per-byte region reads (Read Byte / Read
+# Block loops) are logged by the tool only as progress summaries, so they are not individual
+# exchanges here — only the single confirming Read Block of the program head is.
+
+# --- connect + confirm STOP + protection flag ---
+→ 22   ← 06   (Restart — clears the error state)
+→ 21   ← 06 03 21 45   (IdentNo 0x45 = 0BA6.ES10)
+→ 55 12 12 aa   ← (nothing)   (STOP to an already-stopped device is not acknowledged)
+→ 55 17 17 aa   ← 06 42   (mode = STOP)
+→ 02 00 ff 48 ff   ← 06 03 00 ff 48 ff 40   (password IS set: 0x40)
+
+# --- unlock (step 3): restart + re-negotiate, read the flag + magic, then the CLEAR write ---
+→ 22   ← 06
+→ 21   ← 06 03 21 45
+→ 55 17 17 aa   ← 06 42
+→ 02 00 ff 48 ff   ← 06 03 00 ff 48 ff 40
+→ 02 00 ff 1f 00   ← 06 03 00 ff 1f 00 04   (magic 1 = 0x04)
+→ 02 00 ff 1f 01   ← 06 03 00 ff 1f 01 00   (magic 2 = 0x00)
+# (password store 0x00000566 ×10 read here as a Read Byte loop → dd c5 df c6 d8 c9 d8 00 00 00,
+#  which XOR-decodes through "protect customer" to "RHOMBUS" — summarised, not an exchange)
+→ 01 00 ff 48 00 00   ← 06   (CLEAR protection: Write Byte 0x00FF4800 = 0x00 — the register LSC uses)
+
+# --- the confirming Read Block: program head at BARE 0x00003292, 16 bytes → real data + XOR ---
+# 01 00 19 80 21 80 ff ff ff ff ff ff 01 00 1f 80 (14/16 non-zero); XOR checksum 0xA7.
+→ 05 00 00 32 92 00 10   ← 06 01 00 19 80 21 80 ff ff ff ff ff ff 01 00 1f 80 a7
+
+# --- OBSERVED but NOT yet reproduced by the fake (documented for the record) ---
+# • A 512-byte Read Block at the same address is rejected: "→ 05 00 00 32 92 02 00 ← 06 15 03"
+#   (illegal access). So the ES10 caps a Read Block telegram well below 512 bytes; 16 works. The
+#   tool therefore reads in 16-byte blocks.
+# • The block-read window is FRAGILE: after the clear write it stays open across bare Read Bytes,
+#   but a mode query (0x55) or a PAGED Read Byte (0x00FF48FF) issued afterwards re-locks it — the
+#   next Read Block then returns 06 15 03. (The tool now goes straight from the clear write to the
+#   Read Block with no mode/register read in between.)

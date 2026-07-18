@@ -41,6 +41,8 @@ function parseConfig(line: string): FakeDeviceConfig {
     if (key === 'identNo' || key === 'mode') cfg[key] = parseInt(val, 16);
     else if (key === 'passwordExists' || key === 'leaksCleartext' || key === 'clearWriteUnlocks' || key === 'blockReadsWork')
       cfg[key] = val === '1' || val === 'true';
+    // program=<hex bytes> loads the program-body bytes (so a fixture can replay a real Read Block).
+    else if (key === 'program') cfg.program = Uint8Array.from(val.match(/../g) ?? [], (h) => parseInt(h, 16));
   }
   return cfg;
 }
