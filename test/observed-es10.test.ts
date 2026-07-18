@@ -11,7 +11,7 @@ import { ADDR } from '../src/pg/constants.js';
 import { readFirmware } from '../src/actions/diagnostics.js';
 import { recoverPassword, clearProtectionAndUnlock } from '../src/actions/password.js';
 import { readAllAndDecode } from '../src/actions/program.js';
-import { FakeDevice } from './helpers/fake-device.js';
+import { FakeDevice, LSC_0BA6_MEMORY_RANGES } from './helpers/fake-device.js';
 import { logged, makeHarness, wroteByte } from './helpers/harness.js';
 
 // The device under test in the notebook: password-protected, does NOT leak the cleartext when
@@ -134,17 +134,36 @@ test('regression: after a failed unlock, decode BLOCKS instead of reading a prot
   assert.equal(h.store.get().dumped, false);
 });
 
-test('0BA6 read pulls the program image via Read Block from the bare Logo6 map (0x00002FAA)', async () => {
-  const h = makeHarness({ ...ES10, passwordExists: false, blockReadsWork: true, program: new Uint8Array(16).fill(0x5a) }); // unprotected → readable
+test('0BA6 read follows every exact LSC range in declaration order', async () => {
+  const h = makeHarness({
+    ...ES10,
+    passwordExists: false,
+    blockReadsWork: true,
+    blockRejectUnmapped: true,
+    program: new Uint8Array(16).fill(0x5a),
+  }); // unprotected → readable
   await readAllAndDecode(h.app);
-  // The 0BA6 program region is BLOCK-read-only, so the image is read via Read Block (0x05) at the
-  // BARE offset-table base 0x00002FAA (00 00 2f aa) — Memory reads aren't paged.
-  const imgRead = h.device.writes.find((w) => w[0] === 0x05 && w[1] === 0x00 && w[2] === 0x00 && w[3] === 0x2f && w[4] === 0xaa);
-  assert.ok(imgRead, 'reads the 0BA6 image base 0x00002FAA via Read Block');
-  // The image spans 0x00002FAA..0x00003292+3800 = 4544 bytes; the program body sits at offset 744.
+  const reads = h.device.writes.filter((w) => w[0] === 0x05);
+  const decoded = reads.map((w) => ({
+    addr: (((w[1] << 24) | (w[2] << 16) | (w[3] << 8) | w[4]) >>> 0),
+    count: (w[5] << 8) | w[6],
+  }));
+  assert.ok(decoded.every((r) => r.count > 0 && r.count <= 16), 'uses conservative blocks of at most 16 bytes');
+  assert.ok(
+    decoded.every((read) =>
+      LSC_0BA6_MEMORY_RANGES.some(([base, len]) => read.addr >= base && read.addr + read.count <= base + len),
+    ),
+    'no Read Block crosses an LSC Memory boundary',
+  );
+  const firstBases = decoded.filter((read, i) => decoded.findIndex((r) => r.addr === read.addr) === i).map((r) => r.addr);
+  assert.deepEqual(
+    firstBases.filter((addr) => LSC_0BA6_MEMORY_RANGES.some(([base]) => base === addr)),
+    LSC_0BA6_MEMORY_RANGES.map(([base]) => base),
+  );
+  // Address-preserving output spans 0x0688..0x3292+3800; the body begins at offset 11274.
   assert.equal(h.ui.downloads.length, 1);
-  assert.equal(h.ui.downloads[0].bytes.length, 4544);
-  assert.equal(h.ui.downloads[0].bytes[744], 0x5a);
+  assert.equal(h.ui.downloads[0].bytes.length, 15_074);
+  assert.equal(h.ui.downloads[0].bytes[11_274], 0x5a);
   // No decoder for 0BA6 yet, but the raw bytes are captured and the dump is marked done.
   assert.ok(logged(h.logger, 'Raw program image captured') || logged(h.logger, 'No netlist decoder'));
   assert.equal(h.store.get().dumped, true);
@@ -167,7 +186,7 @@ test('full read preserves the session that was successfully unlocked', async () 
   const reconnectsAfter = h.device.writes.filter((w) => w[0] === 0x21 || w[0] === 0x22).length;
   assert.equal(reconnectsAfter, reconnectsBefore, 'must not restart/reconnect after a verified unlock');
   assert.equal(h.ui.downloads.length, 1);
-  assert.equal(h.ui.downloads[0].bytes.length, 4544);
+  assert.equal(h.ui.downloads[0].bytes.length, 15_074);
 });
 
 test('full read aborts and saves nothing on a GENUINE Read Block failure after unlock', async () => {
@@ -180,6 +199,19 @@ test('full read aborts and saves nothing on a GENUINE Read Block failure after u
   await assert.rejects(readAllAndDecode(h.app));
   assert.equal(h.ui.downloads.length, 0, 'must not save a mixed-session or zero-filled partial image');
   assert.equal(h.store.get().dumped, false);
+});
+
+test('full read aborts, recovers, and saves nothing on NOK 03 inside an exact region', async () => {
+  const h = makeHarness({
+    ...ES10,
+    passwordExists: false,
+    blockReadsWork: true,
+    rejectBlockAt: 0x0aae,
+  });
+  await assert.rejects(readAllAndDecode(h.app));
+  assert.equal(h.ui.downloads.length, 0);
+  assert.equal(h.store.get().dumped, false);
+  assert.equal(h.device.writes.filter((w) => w[0] === 0x22).length, 2, 'preamble plus fault recovery');
 });
 
 test('uniform program images are saved as diagnostic evidence', async () => {

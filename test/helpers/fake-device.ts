@@ -22,6 +22,28 @@ const BASE = {
   SET: 0x4801, // ADR_SET_PASSWORD_ACTIVE
 } as const;
 
+// LSC Logo6's exact wire-readable Memory ranges. Keep this test oracle independent of
+// src/pg/device.ts so an incorrect production map makes the fake reject the transfer.
+export const LSC_0BA6_MEMORY_RANGES = [
+  [0x0688, 100],
+  [0x0708, 800],
+  [0x0aa8, 6],
+  [0x0aae, 100],
+  [0x0b2e, 6400],
+  [0x2b36, 50],
+  [0x2b76, 25],
+  [0x2c16, 256],
+  [0x2d2a, 640],
+  [0x2faa, 420],
+  [0x31ca, 40],
+  [0x31f2, 60],
+  [0x322e, 20],
+  [0x3242, 40],
+  [0x326a, 20],
+  [0x327e, 20],
+  [0x3292, 3800],
+] as const;
+
 export interface FakeDeviceConfig {
   identNo?: number; // connect reply; default 0x45 (0BA6.ES10). 0x42 → 0BA5 (2-byte addressing).
   mode?: number; // 0x42 STOP / 0x01 RUN; default STOP
@@ -33,6 +55,7 @@ export interface FakeDeviceConfig {
   // When set, a Read Block whose range touches ANY unmapped address is rejected 06 15 03 (illegal
   // access 0x03, "read across the border"), like the real ES10 reading past a Memory region's end.
   blockRejectUnmapped?: boolean;
+  rejectBlockAt?: number; // force a latched 06 15 03 at this exact block start
   password?: string; // stored cleartext (≤10 chars)
   encryptPassword?: boolean; // store the password XOR-obfuscated like newer 0BA6 (ES10) firmware
   program?: Uint8Array; // bytes at the program base
@@ -100,6 +123,11 @@ export class FakeDevice implements Transport {
     // Program memory: protected until the clear write drops protection (on a leaking device).
     // The body lives at the device family's program base — 0x3292 on 0BA6, 0x0EE8 on 0BA4/0BA5 —
     // read via progWire (BARE, no 0xFF page: Memory.upload does not go through getAdress).
+    if (this.addrWidth === 4) {
+      for (const [base, len] of LSC_0BA6_MEMORY_RANGES) {
+        for (let i = 0; i < len; i++) this.progMem.set(this.progWire(base + i), 0);
+      }
+    }
     const progBase = this.addrWidth === 4 ? BASE.PROGRAM_0BA6 : BASE.PROGRAM_LEGACY;
     const prog = config.program ?? new Uint8Array(0);
     for (let i = 0; i < prog.length; i++) this.progMem.set(this.progWire(progBase + i), prog[i]);
@@ -225,6 +253,11 @@ export class FakeDevice implements Transport {
       }
       const a = this.addr(cmd);
       const count = (cmd[1 + w] << 8) | cmd[2 + w];
+      if (a === this.cfg.rejectBlockAt) {
+        this.latched = true;
+        this.push(0x06, 0x15, 0x03);
+        return;
+      }
       // Reading past a Memory region's end (into unmapped space) is illegal access (0x03), latching.
       if (this.cfg.blockRejectUnmapped) {
         for (let i = 0; i < count; i++) {

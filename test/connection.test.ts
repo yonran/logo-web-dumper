@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Connection } from '../src/pg/connection.js';
 import { Logger } from '../src/log.js';
 import { ADDR, getAdress, isStopMode } from '../src/pg/constants.js';
-import { FakeDevice, type FakeDeviceConfig } from './helpers/fake-device.js';
+import { FakeDevice, LSC_0BA6_MEMORY_RANGES, type FakeDeviceConfig } from './helpers/fake-device.js';
 
 test('getAdress: pages symbolic registers ≥ 0x1F00, leaves lower bases bare', () => {
   // ≥ 0x1F00 → OR the 0x00FF____ page (LSC Logo6.getAdress).
@@ -31,6 +31,16 @@ test('getAdress is NOT applied to the program image — 0x3292 is ≥ 0x1F00 yet
   const c = new Connection(new FakeDevice({ identNo: 0x45 }), new Logger());
   assert.equal(c.mem.programBase, 0x00003292);
   assert.notEqual(c.mem.programBase, getAdress(0x3292)); // getAdress(0x3292) === 0x00FF3292
+});
+
+test('0BA6 map matches all exact LSC ranges, transfer total, and address span', () => {
+  const c = new Connection(new FakeDevice({ identNo: 0x45 }), new Logger());
+  assert.deepEqual(
+    c.mem.regions.map((r) => [r.base, r.len]),
+    LSC_0BA6_MEMORY_RANGES.map(([base, len]) => [base, len]),
+  );
+  assert.equal(c.mem.regions.reduce((sum, r) => sum + r.len, 0), 12_797);
+  assert.equal(Math.max(...c.mem.regions.map((r) => r.base + r.len)) - Math.min(...c.mem.regions.map((r) => r.base)), 15_074);
 });
 
 function make(cfg: FakeDeviceConfig = {}): { c: Connection; d: FakeDevice; l: Logger } {
@@ -104,18 +114,12 @@ test('writeByte to 0x00FF4800 is ACKed and sends 01 + address + data', async () 
   assert.deepEqual([...d.writes[d.writes.length - 1]], [0x01, 0x00, 0xff, 0x48, 0x00, 0x00]);
 });
 
-test('readRegionViaBlock stops at a region border and keeps the content read so far', async () => {
-  // A Memory region whose real content (96 bytes) is shorter than the window we ask for (300).
-  // An illegal-access at the border (0x03) means "region ends here", NOT a failure: the reader stops
-  // and keeps what it captured (the gap tail is legitimately empty). It must NOT recover/Restart —
-  // that would re-lock the program on real hardware.
-  const { c, l, d } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true, program: new Uint8Array(96).fill(0xab) });
-  const out = await c.readRegionViaBlock(c.mem.programBase, 300, 'prog');
-  assert.equal(out.length, 300);
-  assert.ok([...out.slice(0, 96)].every((b) => b === 0xab), 'the 96 real bytes are captured');
-  assert.ok([...out.slice(96)].every((b) => b === 0x00), 'past the content is zero-filled');
-  assert.ok(l.lines.some((x) => x.includes('region content ends here')));
-  assert.equal(d.writes.filter((w) => w[0] === 0x22).length, 0, 'no Restart (would re-lock the program)');
+test('readRegionViaBlock rejects a border fault and recovers the latched protocol', async () => {
+  // 0x0688 has exactly 100 bytes. Asking for 128 crosses its unmapped gap and must not produce a
+  // plausible-looking partial/zero-filled result. Read Block recovery sends Restart after NOK 03.
+  const { c, d } = make({ passwordExists: false, blockReadsWork: true, blockRejectUnmapped: true });
+  await assert.rejects(c.readRegionViaBlock(0x0688, 128, 'bad range'));
+  assert.equal(d.writes.filter((w) => w[0] === 0x22).length, 1);
 });
 
 test('readRegionViaBlock propagates a genuine (non-border) Read Block failure', async () => {
