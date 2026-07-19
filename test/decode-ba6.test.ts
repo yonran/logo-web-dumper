@@ -74,7 +74,7 @@ test('decode0BA6: blocks, inputs, flags, named block, and the Q output', () => {
   assert.ok(nl, 'expected a netlist');
   assert.match(nl, /B001 = AND\(I1, \/B002, ·, ·\)/); // 4 AND pins; the two unwired show as ·
   assert.doesNotMatch(nl.split('\n').find((l) => l.includes('B001 ='))!, /protected/); // basic gate is never "protected"
-  assert.match(nl, /B002 "TMR" = on-delay\(I2\)\s+T=3\.00s\s+\[remanent, protected\]/);
+  assert.match(nl, /B002 "TMR" = on-delay\(Trg=I2\)\s+T=3\.00s\s+\[remanent, protected\]/); // input labelled by its pin role
   assert.match(nl, /Q1 = B001/);
   assert.match(nl, /=== NAMED BLOCKS ===/);
   assert.match(nl, /B002 = "TMR"/);
@@ -97,9 +97,9 @@ test('decode0BA6: latching-relay and pulse-relay are never [protected] (plain Bl
   const nl = decode0BA6(img)!;
   const b001 = nl.split('\n').find((l) => l.includes('B001 ='))!;
   const b002 = nl.split('\n').find((l) => l.includes('B002 ='))!;
-  assert.match(b001, /latching-relay/);
+  assert.match(b001, /latching-relay\(S=·, R=·\)/); // Set/Reset pins labelled by role
   assert.doesNotMatch(b001, /protected/);
-  assert.match(b002, /pulse-relay/);
+  assert.match(b002, /pulse-relay\(Trg=·, S=·, R=·\)/);
   assert.match(b002, /\[remanent\]/); // remanence DOES apply (RemanenceObject)
   assert.doesNotMatch(b002, /protected/); // protection does NOT
 });
@@ -116,8 +116,9 @@ test('toMermaid: emits a flowchart with nodes, shapes, inverted edges, and outpu
   assert.match(m, /I1\(\["I1"\]\)/); // input terminal as a stadium node
   assert.match(m, /B001\["B001<br\/>& AND"\]/); // gate as a rectangle carrying the IEC symbol
   assert.match(m, /B002\{\{"B002 'TMR'<br\/>on-delay T=3\.00s"\}\}/); // timer as a hexagon with its value
-  assert.match(m, /I1 --> B001/); // normal edge
+  assert.match(m, /I1 --> B001/); // normal edge (basic gate: no pin label)
   assert.match(m, /B002 --o B001/); // inverted input as a circle-ending link (the LSC negation bubble)
+  assert.match(m, /I2 -->\|Trg\| B002/); // special-function pin carries its role as an edge label
   assert.match(m, /subgraph OUT\[outputs\]/);
   assert.match(m, /B001 --> Q1/); // output driver edge
 });

@@ -40,7 +40,7 @@ const OPCODES: Record<number, readonly [string, number, number]> = {
   0x21: ['on-delay', 8, 1],
   0x22: ['off-delay', 12, 2],
   0x23: ['pulse-relay', 12, 3],
-  0x24: ['weekly-timer', 20, 3],
+  0x24: ['weekly-timer', 20, 0], // the 3 cams are PARAMETERS, not wired inputs — no digital pins
   0x25: ['latching-relay', 8, 2],
   0x27: ['ret-on-delay', 12, 2],
   0x29: ['hours-counter', 28, 3],
@@ -68,6 +68,44 @@ const OPCODES: Record<number, readonly [string, number, number]> = {
   0x42: ['amplifier', 12, 1],
   0x43: ['PID', 40, 3],
   0x44: ['analog-maths', 20, 1],
+};
+
+/**
+ * Ordered names of a special-function block's WIRED input pins (from the LSC block classes'
+ * initInConnectors, taking the connectors before the parameter connector). Basic gates and NOT/XOR
+ * have only numbered, commutative inputs, so they are omitted (labels would add nothing). The order
+ * matches the byte order the compiler reads (connect(block, 0), (1), …), so pin k = names[k].
+ */
+const INPUT_NAMES: Record<number, readonly string[]> = {
+  0x21: ['Trg'], // on-delay
+  0x22: ['Trg', 'R'], // off-delay
+  0x23: ['Trg', 'S', 'R'], // pulse-relay
+  0x25: ['S', 'R'], // latching-relay (RS)
+  0x27: ['Trg', 'R'], // ret-on-delay
+  0x29: ['R', 'En', 'Ral'], // hours-counter
+  0x2a: ['Trg'], // wiping-relay
+  0x2b: ['R', 'Cnt', 'Dir'], // up/down-counter
+  0x2c: ['Fre'], // freq-trigger
+  0x2d: ['En', 'Inv'], // async-pulse-gen
+  0x2f: ['Trg'], // on/off-delay
+  0x30: ['En'], // random
+  0x31: ['Trg'], // stairwell-switch
+  0x32: ['Trg', 'R'], // comfort-switch
+  0x33: ['Trg', 'R'], // wiping-relay-pec
+  0x34: ['En'], // message-text
+  0x35: ['Ax'], // analog-threshold
+  0x36: ['Ax', 'Ay'], // analog-comparator
+  0x37: ['En'], // softkey
+  0x38: ['In', 'Trg', 'Dir'], // shift-register
+  0x39: ['En', 'Ax'], // analog-watchdog
+  0x3a: ['Ax'], // analog-delta-trigger
+  0x3b: ['En', 'Ax'], // PWM
+  0x3c: ['En', 'R'], // math-detection
+  0x40: ['En', 'S1', 'S2'], // analog-mux
+  0x41: ['En', 'Sel', 'St'], // ramp-control
+  0x42: ['Ax'], // amplifier
+  0x43: ['A/M', 'R', 'PV'], // PID
+  0x44: ['En'], // analog-maths
 };
 
 /**
@@ -226,11 +264,13 @@ export function decode0BA6(img: Uint8Array): string | null {
       continue;
     }
     const [name, , nIn] = spec;
+    const pinNames = INPUT_NAMES[op];
     const inputs: string[] = [];
     for (let k = 0; k < nIn; k++) {
       const wo = base + 2 + k * 2;
       if (wo + 1 >= img.length) break;
-      inputs.push(connector(w16(img, wo)) ?? '·');
+      const sig = connector(w16(img, wo)) ?? '·';
+      inputs.push(pinNames?.[k] ? pinNames[k] + '=' + sig : sig); // role label for SF pins; positional for gates
     }
     // Time parameters (for timer blocks) sit as plain words right after the input connectors.
     const params: string[] = [];
@@ -323,9 +363,11 @@ export function toMermaid(img: Uint8Array): string | null {
   const edges: string[] = [];
   const inputTerms = new Set<string>(); // I*/AI* terminals referenced as sources
   // A negated input uses Mermaid's circle-ending link (`--o`), which draws a bubble at the block's
-  // input pin — the same inversion mark LSC puts there. A normal input is a plain arrow.
-  const addEdge = (from: string, to: string, neg: boolean): void => {
-    edges.push('  ' + from + (neg ? ' --o ' : ' --> ') + to);
+  // input pin — the same inversion mark LSC puts there. A normal input is a plain arrow. Special-
+  // function pins carry their role name as an edge label (Trg/S/R/Cnt/…).
+  const addEdge = (from: string, to: string, neg: boolean, label?: string): void => {
+    const arrow = neg ? '--o' : '-->';
+    edges.push('  ' + from + ' ' + arrow + (label ? '|' + label + '|' : '') + ' ' + to);
     if (/^A?I\d+$/.test(from)) inputTerms.add(from);
   };
 
@@ -345,11 +387,12 @@ export function toMermaid(img: Uint8Array): string | null {
     }
     nodeLines.push('  ' + id + nodeShape(op, text));
     const nIn = spec ? spec[2] : 0;
+    const pinNames = INPUT_NAMES[op];
     for (let k = 0; k < nIn; k++) {
       const wo = base + 2 + k * 2;
       if (wo + 1 >= img.length) break;
       const p = connectorParts(w16(img, wo));
-      if (p) addEdge(p.sig, id, p.neg);
+      if (p) addEdge(p.sig, id, p.neg, pinNames?.[k]);
     }
   }
 
