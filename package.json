@@ -5,8 +5,12 @@
   "license": "Unlicense",
   "private": true,
   "type": "module",
+  "bin": {
+    "logo-decode": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "decode": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.json",
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build:test && node --test \"build/test/**/*.test.js\"",
