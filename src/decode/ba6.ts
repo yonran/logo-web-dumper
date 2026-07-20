@@ -158,20 +158,8 @@ const PROTECTION = new Set([
   0x3a, 0x3b, 0x3c, 0x40, 0x41, 0x42, 0x43, 0x44,
 ]);
 
-/**
- * Timer blocks whose record stores plain time words immediately after the input connectors, in this
- * order. (Blocks with cam/analog/counter parameters instead of plain times are omitted — their
- * parameter bytes are shown raw rather than mis-decoded as times.)
- */
-const TIME_PARAMS: Record<number, readonly string[]> = {
-  0x21: ['T'], // on-delay
-  0x22: ['T'], // off-delay
-  0x27: ['T'], // ret-on-delay
-  0x2a: ['T'], // wiping-relay (pulse width)
-  0x2d: ['TH', 'TL'], // async-pulse-gen
-  0x2f: ['TH', 'TL'], // on/off-delay
-  0x30: ['TH', 'TL'], // random
-};
+/** Timer/timing blocks drawn as a hexagon in the diagram (delays, generators, freq trigger). */
+const HEX_OPS = new Set([0x21, 0x22, 0x27, 0x2a, 0x2c, 0x2d, 0x2f, 0x30, 0x31, 0x32, 0x33]);
 
 /**
  * Decode a LOGO! time word: the top 2 bits select the base, the low 14 bits the value.
@@ -185,6 +173,242 @@ export function decodeTime(word: number): string {
   const a = Math.floor(v / 60);
   const b = String(v % 60).padStart(2, '0');
   return base === 0x8000 ? a + ':' + b + 'm' : a + ':' + b + 'h';
+}
+
+/** Signed analog value shown with `dp` implied decimal places (displayed = raw / 10^dp). */
+function analog(raw: number, dp: number): string {
+  const neg = raw < 0;
+  let s = String(Math.abs(raw));
+  if (dp > 0) {
+    while (s.length <= dp) s = '0' + s;
+    s = s.slice(0, s.length - dp) + '.' + s.slice(s.length - dp);
+  }
+  return (neg ? '-' : '') + s;
+}
+
+/** Weekday bitmask (bit0=Sun … bit6=Sat) → a compact label. */
+function weekdays(mask: number): string {
+  if (mask === 0x7f) return 'daily';
+  if (mask === 0x3e) return 'Mo-Fr';
+  if (mask === 0x7e) return 'Mo-Sa';
+  const names = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  const on: string[] = [];
+  for (let i = 0; i < 7; i++) if (mask & (1 << i)) on.push(names[i]);
+  return on.join(',') || 'never';
+}
+
+/** A weekly-timer cam time word → "hh:mm", or null when the cam slot is inactive. */
+function camTime(word: number): string | null {
+  if (word === 0xffff || (word & 0x3fff) === 0x3fff) return null;
+  const v = word & 0x3fff;
+  return String(Math.floor(v / 60)).padStart(2, '0') + ':' + String(v % 60).padStart(2, '0');
+}
+
+/**
+ * Decode the configured PARAMETERS of a block (everything after the input connectors) to a list of
+ * "Name=value" strings. Layouts and encodings are from the LSC compile() methods (CompilerFromLogo4/
+ * 5/6) — see PROTOCOL notes / scratchpad ba6-params-findings. `hi` is the opcode high byte, whose
+ * bits 0x20>>k mark parameter k as a reference to another block rather than a literal.
+ */
+function blockParams(op: number, img: Uint8Array, pBase: number, hi: number): string[] {
+  const uw = (o: number): number => (pBase + o + 1 < img.length ? w16(img, pBase + o) : 0);
+  const sw = (o: number): number => {
+    const v = uw(o);
+    return v >= 0x8000 ? v - 0x10000 : v;
+  };
+  const dw = (o: number): number => (uw(o) | (uw(o + 2) << 16)) >>> 0;
+  const bt = (o: number): number => img[pBase + o] ?? 0;
+  const ref = (bit: number): boolean => (hi & bit) !== 0;
+  const refB = (o: number): string => '→B' + String(bt(o) - 9).padStart(3, '0'); // ref target = low byte
+  const t = (o: number): string => decodeTime(uw(o));
+  const gain = (o: number): string => (sw(o) / 100).toFixed(2);
+  const out: string[] = [];
+  switch (op) {
+    case 0x21: // on-delay
+    case 0x22: // off-delay
+    case 0x27: // ret-on-delay
+    case 0x2a: // wiping-relay
+      out.push('T=' + (ref(0x20) ? refB(0) : t(0)));
+      break;
+    case 0x2d: // async-pulse-gen
+    case 0x2f: // on/off-delay
+    case 0x30: // random
+      out.push('TH=' + (ref(0x20) ? refB(0) : t(0)), 'TL=' + (ref(0x10) ? refB(2) : t(2)));
+      break;
+    case 0x31: // stairwell-switch
+      out.push('T=' + (ref(0x20) ? refB(0) : t(0)), 'T!=' + (ref(0x10) ? refB(2) : t(2)), 'T!L=' + (ref(0x08) ? refB(4) : t(4)));
+      break;
+    case 0x32: // comfort-switch (TL before TH in memory)
+      out.push(
+        'TH=' + (ref(0x20) ? refB(2) : t(2)),
+        'TL=' + (ref(0x10) ? refB(0) : t(0)),
+        'T!=' + (ref(0x08) ? refB(4) : t(4)),
+        'T!L=' + (ref(0x04) ? refB(6) : t(6)),
+      );
+      break;
+    case 0x33: // wiping-relay-pec
+      out.push('TH=' + (ref(0x20) ? refB(0) : t(0)), 'TL=' + (ref(0x10) ? refB(2) : t(2)), 'cycles=' + bt(4));
+      break;
+    case 0x23: // pulse-relay
+      out.push(bt(0) === 1 ? 'Set-priority' : 'Reset-priority');
+      break;
+    case 0x2c: // freq-trigger
+      out.push('On=' + uw(0), 'Off=' + uw(2), 'G_T=' + (ref(0x20) ? refB(4) : t(4)));
+      break;
+    case 0x2b: // up/down-counter
+      out.push('On=' + (ref(0x20) ? refB(0) : dw(0)), 'Off=' + (ref(0x10) ? refB(4) : dw(4)), 'Start=' + dw(8));
+      break;
+    case 0x29: // hours-counter
+      out.push('OT=' + dw(0));
+      if (ref(0x20)) out.push('MI=' + refB(4));
+      else if ((bt(7) & 0xc0) === 0) out.push('MI=' + (((bt(7) & 0x3f) << 24) | (bt(6) << 16) | (bt(5) << 8) | bt(4)) + 'h');
+      else out.push('MI=' + decodeTime((bt(6) << 8) | bt(7)));
+      if (bt(10) === 1) out.push('Q-indep-of-En');
+      break;
+    case 0x24: {
+      // weekly timer: 3 cams (on/off time words, then day masks, then pulse)
+      for (let c = 0; c < 3; c++) {
+        const on = camTime(uw(c * 4));
+        const off = camTime(uw(c * 4 + 2));
+        if (on === null && off === null) continue;
+        out.push('Cam' + (c + 1) + '=' + (on ?? '--:--') + '→' + (off ?? '--:--') + '[' + weekdays(bt(12 + c)) + ']');
+      }
+      if (bt(15) > 0) out.push('pulse');
+      break;
+    }
+    case 0x2e: {
+      // year clock: On/Off dates + mode
+      const date = (o: number): string => 2000 + bt(o + 2) + '-' + String(bt(o + 1)).padStart(2, '0') + '-' + String(bt(o)).padStart(2, '0');
+      out.push('On=' + date(0), 'Off=' + date(3));
+      const m = bt(6);
+      const f: string[] = [];
+      if (m & 0x01) f.push('pulse');
+      if (m & 0x40) f.push('yearly');
+      if (m & 0x80) f.push('monthly');
+      if (f.length) out.push(f.join(','));
+      break;
+    }
+    case 0x34: // message-text
+      out.push('prio=' + (bt(0) & 0x7f));
+      if (bt(0) & 0x80) out.push('ack');
+      out.push('msg#=' + bt(1), bt(3) & 0x80 ? 'RTF' : 'text');
+      break;
+    case 0x37: // softkey
+      out.push(bt(0) & 0x01 ? 'switch' : 'momentary');
+      if (bt(0) & 0x80) out.push('on@start');
+      break;
+    case 0x38: {
+      // shift-register: output bit = index of the lowest set bit
+      const mask = bt(0);
+      let bit = 0;
+      while (bit < 8 && !(mask & (1 << bit))) bit++;
+      out.push('out=bit' + (mask ? bit + 1 : '?'));
+      break;
+    }
+    case 0x3c: // math-detection
+      if (bt(0) !== 0xff) out.push('ref=B' + String(bt(0) - 9).padStart(3, '0'));
+      if (bt(1) !== 0) out.push('auto-reset');
+      {
+        const df: string[] = [];
+        if (bt(4) & 0x01) df.push('overflow');
+        if (bt(4) & 0x02) df.push('div0');
+        if (df.length) out.push('detect=' + df.join('+'));
+      }
+      break;
+    case 0x42: {
+      // amplifier
+      const dp = bt(4);
+      out.push('Gain=' + gain(0), 'Offset=' + sw(2));
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x35: // analog-threshold
+    case 0x36: // analog-comparator
+    case 0x39: {
+      // analog-watchdog
+      const dp = bt(8);
+      const n1 = op === 0x39 ? 'D1' : 'On';
+      const n2 = op === 0x39 ? 'D2' : 'Off';
+      out.push(
+        n1 + '=' + (ref(0x20) ? refB(0) : analog(sw(0), dp)),
+        n2 + '=' + (ref(0x10) ? refB(2) : analog(sw(2), dp)),
+        'Gain=' + gain(4),
+        'Offset=' + sw(6),
+      );
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x3a: {
+      // analog-delta-trigger: Off is stored as delta = off − on
+      const dp = bt(8);
+      const on = sw(0);
+      out.push('On=' + analog(on, dp), 'Off=' + analog(on + sw(2), dp), 'Gain=' + gain(4), 'Offset=' + sw(6));
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x40: {
+      // analog-mux: 4 selectable values, no gain/offset
+      const dp = bt(8);
+      const flags = [0x20, 0x10, 0x08, 0x04];
+      for (let i = 0; i < 4; i++) out.push('V' + (i + 1) + '=' + (ref(flags[i]) ? refB(i * 2) : analog(sw(i * 2), dp)));
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x44: {
+      // analog-maths: V1 op1 V2 op2 V3 op3 V4
+      const dp = bt(12);
+      const flags = [0x20, 0x10, 0x08, 0x04];
+      const ops = '+-*/';
+      const parts: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        parts.push(ref(flags[i]) ? refB(i * 2) : analog(sw(i * 2), dp));
+        if (i < 3) parts.push(ops[bt(8 + i)] ?? '?');
+      }
+      out.push('f=' + parts.join(' '));
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x41: {
+      // ramp-control
+      const dp = bt(14);
+      out.push(
+        'L1=' + (ref(0x20) ? refB(0) : analog(sw(0), dp)),
+        'L2=' + (ref(0x10) ? refB(2) : analog(sw(2), dp)),
+        'MaxL=' + analog(sw(4), dp),
+        'StSp=' + analog(sw(6), dp),
+        'Rate=' + uw(8),
+        'Gain=' + gain(10),
+        'Offset=' + sw(12),
+      );
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x43: {
+      // PID
+      const dp = bt(17);
+      out.push(
+        'SP=' + (ref(0x20) ? refB(0) : analog(sw(0), dp)),
+        'Mq=' + (ref(0x10) ? refB(2) : uw(2)),
+        'KC=' + (sw(4) / 100).toFixed(2),
+        'TI=' + t(6),
+        'Gain=' + gain(12),
+        'Offset=' + sw(14),
+        'Dir=' + (bt(16) === 0x2d ? '-' : '+'),
+      );
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    case 0x3b: {
+      // PWM
+      const dp = bt(12);
+      out.push('P=' + (ref(0x20) ? refB(0) : t(0)), 'Gain=' + gain(2), 'Offset=' + sw(4), 'min=' + analog(sw(6), dp), 'max=' + analog(sw(8), dp), 'sensor=' + bt(11));
+      if (dp) out.push('dp=' + dp);
+      break;
+    }
+    default:
+      break; // GF gates, latching-relay: no parameters
+  }
+  return out;
 }
 
 /** Read user block names: name-index @0x0688 holds the program line, strings @0x0708 are 8-byte slots. */
@@ -272,12 +496,8 @@ export function decode0BA6(img: Uint8Array): string | null {
       const sig = connector(w16(img, wo)) ?? '·';
       inputs.push(pinNames?.[k] ? pinNames[k] + '=' + sig : sig); // role label for SF pins; positional for gates
     }
-    // Time parameters (for timer blocks) sit as plain words right after the input connectors.
-    const params: string[] = [];
-    for (const [k, plabel] of (TIME_PARAMS[op] ?? []).entries()) {
-      const wo = base + 2 + nIn * 2 + k * 2;
-      if (wo + 1 < img.length) params.push(plabel + '=' + decodeTime(w16(img, wo)));
-    }
+    // Configured parameters (timer values, thresholds, counter limits, …) follow the inputs.
+    const params = blockParams(op, img, base + 2 + nIn * 2, hi);
     const paramStr = params.length ? '  ' + params.join(' ') : '';
     out.push('  ' + label + ' = ' + name + '(' + inputs.join(', ') + ')' + paramStr + flagStr);
   }
@@ -309,9 +529,9 @@ export function decode0BA6(img: Uint8Array): string | null {
 
   out.push('');
   out.push(
-    'Decoded ' + present.length + ' blocks from the 0BA6 program. Basic gates, wiring, and timer ' +
-      'values are exact. `/X` marks an inverted input; [remanent]/[protected] are per-block flags. ' +
-      'Non-timer special-function parameters (counter limits, analog gains) are not decoded yet.',
+    'Decoded ' + present.length + ' blocks from the 0BA6 program. Gates, wiring, pin roles, and block ' +
+      'parameters are decoded. `/X` marks an inverted input; `→Bxxx` a parameter wired from another ' +
+      'block; [remanent]/[protected] are per-block flags.',
   );
   return out.join('\n');
 }
@@ -319,7 +539,7 @@ export function decode0BA6(img: Uint8Array): string | null {
 /** Mermaid node shape for a block: hexagon for timers, rounded for latches/pulse, rectangle otherwise. */
 function nodeShape(op: number, text: string): string {
   const q = '"' + text + '"';
-  if (op in TIME_PARAMS) return '{{' + q + '}}';
+  if (HEX_OPS.has(op)) return '{{' + q + '}}';
   if (op === 0x25 || op === 0x23) return '(' + q + ')';
   return '[' + q + ']';
 }
@@ -375,18 +595,17 @@ export function toMermaid(img: Uint8Array): string | null {
     const base = prog + off;
     if (off < 0 || base + 2 > img.length) continue;
     const op = img[base];
+    const hi = img[base + 1];
     const id = 'B' + String(n).padStart(3, '0');
     const spec = OPCODES[op];
     const type = spec ? spec[0] : 'op' + op.toString(16).padStart(2, '0');
     let text = id;
     if (names.has(n)) text += " '" + names.get(n) + "'";
     text += '<br/>' + (GATE_SYMBOL[op] ? GATE_SYMBOL[op] + ' ' : '') + type;
-    for (const [k, plabel] of (TIME_PARAMS[op] ?? []).entries()) {
-      const wo = base + 2 + (spec ? spec[2] : 0) * 2 + k * 2;
-      if (wo + 1 < img.length) text += ' ' + plabel + '=' + decodeTime(w16(img, wo));
-    }
-    nodeLines.push('  ' + id + nodeShape(op, text));
     const nIn = spec ? spec[2] : 0;
+    const params = blockParams(op, img, base + 2 + nIn * 2, hi);
+    if (params.length) text += '<br/>' + params.join(' ');
+    nodeLines.push('  ' + id + nodeShape(op, text));
     const pinNames = INPUT_NAMES[op];
     for (let k = 0; k < nIn; k++) {
       const wo = base + 2 + k * 2;

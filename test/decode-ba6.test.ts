@@ -104,6 +104,51 @@ test('decode0BA6: latching-relay and pulse-relay are never [protected] (plain Bl
   assert.doesNotMatch(b002, /protected/); // protection does NOT
 });
 
+/** Build a full image with a single block B001 = the given opcode, inputs and parameter bytes. */
+function blockImage(op: number, hi: number, inputs: number[], params: number[]): Uint8Array {
+  const img = new Uint8Array(15074).fill(0xff);
+  setWord(img, 0x2faa + 2 * (1 + 9), 200); // B001 at program offset 0
+  setWord(img, 0x3292, op | (hi << 8));
+  inputs.forEach((w, i) => setWord(img, 0x3292 + 2 + i * 2, w));
+  const pBase = 0x3292 + 2 + inputs.length * 2 - MIN_BASE;
+  params.forEach((b, i) => (img[pBase + i] = b));
+  return img;
+}
+function blockLine(img: Uint8Array): string {
+  return decode0BA6(img)!.split('\n').find((l) => l.includes('B001 ='))!;
+}
+
+test('blockParams: up/down-counter decodes On/Off/Start limits and pin roles', () => {
+  // R=I1, Cnt=I2, Dir=open; On=100, Off=0, Start=50 (each a 32-bit LE dword).
+  const img = blockImage(0x2b, 0x40, [0x0000, 0x0001, 0xffff], [100, 0, 0, 0, 0, 0, 0, 0, 50, 0, 0, 0]);
+  const line = blockLine(img);
+  assert.match(line, /up\/down-counter\(R=I1, Cnt=I2, Dir=·\)/);
+  assert.match(line, /On=100 Off=0 Start=50/);
+});
+
+test('blockParams: analog-comparator applies decimal places to thresholds and gain/100', () => {
+  // On=500, Off=200, Gain=100 (→1.00), Offset=0, Points=1 → On=50.0, Off=20.0.
+  const img = blockImage(0x36, 0x40, [0x0000, 0x0001], [0xf4, 0x01, 0xc8, 0x00, 0x64, 0x00, 0x00, 0x00, 0x01]);
+  const line = blockLine(img);
+  assert.match(line, /analog-comparator/);
+  assert.match(line, /On=50\.0 Off=20\.0 Gain=1\.00 Offset=0 dp=1/);
+});
+
+test('blockParams: weekly timer decodes cam times and weekday mask, skips inactive cams', () => {
+  // Cam0 On 07:00 (420), Off 22:00 (1320), days Mon–Fri (0x3e); cams 1–2 inactive (0xFFFF).
+  const img = blockImage(0x24, 0x40, [], [0xa4, 0x01, 0x28, 0x05, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3e, 0x00, 0x00, 0x00]);
+  const line = blockLine(img);
+  assert.match(line, /weekly-timer/);
+  assert.match(line, /Cam1=07:00→22:00\[Mo-Fr\]/);
+  assert.doesNotMatch(line, /Cam2/); // inactive cams are skipped
+});
+
+test('blockParams: a parameter wired from another block shows as →Bxxx (reference flag)', () => {
+  // on-delay with the reference flag 0x20 set → T is a reference; low byte 0x0f → line 15 → B006.
+  const img = blockImage(0x21, 0x60, [0x0000], [0x0f, 0x00]); // hi 0x60 = 0x40 (unprotected) | 0x20 (param0 ref)
+  assert.match(blockLine(img), /T=→B006/);
+});
+
 test('decode0BA6: declines an image that is too short to hold the program body', () => {
   assert.equal(decode0BA6(new Uint8Array(100)), null);
 });
@@ -115,7 +160,7 @@ test('toMermaid: emits a flowchart with nodes, shapes, inverted edges, and outpu
   assert.match(m, /subgraph IN\[inputs\]/);
   assert.match(m, /I1\(\["I1"\]\)/); // input terminal as a stadium node
   assert.match(m, /B001\["B001<br\/>& AND"\]/); // gate as a rectangle carrying the IEC symbol
-  assert.match(m, /B002\{\{"B002 'TMR'<br\/>on-delay T=3\.00s"\}\}/); // timer as a hexagon with its value
+  assert.match(m, /B002\{\{"B002 'TMR'<br\/>on-delay<br\/>T=3\.00s"\}\}/); // timer hexagon; params on their own line
   assert.match(m, /I1 --> B001/); // normal edge (basic gate: no pin label)
   assert.match(m, /B002 --o B001/); // inverted input as a circle-ending link (the LSC negation bubble)
   assert.match(m, /I2 -->\|Trg\| B002/); // special-function pin carries its role as an edge label
